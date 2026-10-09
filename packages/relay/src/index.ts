@@ -46,10 +46,7 @@ export {
   type ProfileRefreshHelper,
   type ProfileRefreshFailure,
 } from './profile-lifecycle.js';
-export {
-  stageCredentialProfile,
-  ProfileStageError,
-} from './profile-stage.js';
+export { stageCredentialProfile, ProfileStageError } from './profile-stage.js';
 export {
   ProfileUsageService,
   type ProfileUsageHelper,
@@ -191,6 +188,16 @@ export {
   type PromptResolution,
 } from './prompts.js';
 export { HubNotifier } from './hub-notifier.js';
+export {
+  capabilityTargetMatchesRegistration,
+  type ApprovedCapabilityProfile,
+  type CapabilityPreparationOutcome,
+  type CapabilityPreparationService,
+  type CapabilityProfileRegistry,
+  type CapabilityReadiness,
+  type CapabilityTargetProof,
+  type CapabilityTargetVerifier,
+} from './capability-prepare.js';
 export { BoxNotices } from './notices.js';
 export { hashRpcParams, HostInitiatedTokens } from './host-initiated.js';
 export {
@@ -314,7 +321,9 @@ export {
   countWorkingSlots,
   defaultCountRunningBoxes,
   defaultCountWorkingBoxes,
+  capabilityPrepareJobId,
   deleteJob,
+  enqueueCapabilityPrepareJob,
   enqueueQueueJob,
   enqueuePrepareJob,
   loadQueue,
@@ -339,12 +348,14 @@ export {
   writeJob,
   writeQueueLoginCode,
   type CountWorkingFn,
+  type EnqueueCapabilityPrepareJobInput,
   type EnqueueQueueJobInput,
   type EnqueueQueueJobResult,
   type EnqueuePrepareJobInput,
   type QueueAgentKind,
   type QueueConfig,
   type QueueJob,
+  type QueueJobCapabilityPrepare,
   type QueueJobCreateOpts,
   type QueueJobLogin,
   type QueueJobPrepare,

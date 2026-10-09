@@ -8,8 +8,10 @@ import {
   countRunningPrepareJobsByProvider,
   countWorkingSlots,
   defaultCountWorkingBoxes,
+  enqueueCapabilityPrepareJob,
   loadQueue,
   occupiesWorkingSlot,
+  QUEUE_DIR,
   selectNextRunnable,
   selectNextRunnableByWorking,
   selectNextRunnableForeground,
@@ -97,6 +99,41 @@ describe('selectNextRunnable', () => {
   it('returns null when nothing can start right now', () => {
     const jobs = [job({ id: 'tight', maxConcurrent: 1 })];
     expect(selectNextRunnable(jobs, 1)).toBeNull();
+  });
+
+  it('never dispatches a capability job through the general create worker', () => {
+    const capability = job({ id: 'capability', kind: 'capability-prepare' });
+    expect(selectNextRunnable([capability], 0)).toBeNull();
+    expect(selectNextRunnableForeground([{ ...capability, foreground: true }])).toBeNull();
+    expect(selectNextRunnableByWorking([capability], 0, 1)).toBeNull();
+  });
+});
+
+describe('capability preparation manifests', () => {
+  it('uses the operation key as durable identity without carrying an action payload', async () => {
+    const operationKey = `queue-capability-${String(Date.now())}`;
+    const first = await enqueueCapabilityPrepareJob({
+      boxId: 'box-1',
+      capabilityProfileId: 'fixture.browser',
+      operationKey,
+      providerName: 'mock',
+    });
+    const replay = await enqueueCapabilityPrepareJob({
+      boxId: 'box-1',
+      capabilityProfileId: 'fixture.browser',
+      operationKey,
+      providerName: 'mock',
+    });
+    expect(first.created).toBe(true);
+    expect(replay.created).toBe(false);
+    expect(replay.job.id).toBe(first.job.id);
+    expect(replay.job.capabilityPrepare).toEqual({
+      boxId: 'box-1',
+      capabilityProfileId: 'fixture.browser',
+      operationKey,
+    });
+    expect(JSON.stringify(replay.job)).not.toContain('command');
+    await rm(join(QUEUE_DIR, `${first.job.id}.json`), { force: true });
   });
 });
 

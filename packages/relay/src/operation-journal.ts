@@ -8,7 +8,8 @@ export type OperationKind =
   | 'box.create'
   | 'agent.launch'
   | 'task.assign'
-  | 'box.lifecycle';
+  | 'box.lifecycle'
+  | 'capability.prepare';
 
 export type OperationStatus = 'pending' | 'completed' | 'blocked';
 

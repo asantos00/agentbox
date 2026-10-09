@@ -9,6 +9,19 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
+  FsOperationJournal,
+  OperationBlockedError,
+  OperationConflictError,
+  operationRequestHash,
+  runJournaledOperation,
+} from './operation-journal.js';
+import {
+  capabilityTargetMatchesRegistration,
+  type CapabilityPreparationOutcome,
+  type CapabilityPreparationService,
+} from './capability-prepare.js';
+import { capabilityPrepareJobId, enqueueCapabilityPrepareJob, writeJob } from './queue.js';
+import {
   boxCarriedHostPaths,
   boxWorkspacePath,
   executeCloudAction,
@@ -195,6 +208,16 @@ export interface RelayServerOptions {
   profileUsageHelper?: ProfileUsageHelper | null;
   /** Server-owned root for transient isolated profile helper homes. */
   profileHomeRoot?: string;
+  /** Dedicated bearer for the private capability-preparation route. */
+  capabilityPreparationToken?: string;
+  /**
+   * Closed, server-owned reviewed profile catalog and standing-slot verifier.
+   * Absent by default: the route fails closed and no production profiles exist.
+   */
+  capabilityPreparation?: CapabilityPreparationService & {
+    journal?: FsOperationJournal;
+    crashAt?: 'before-external' | 'after-external';
+  };
   /**
    * True on a control box (the hub's password profile). Turns on the
    * `/admin/hostreach/*` surface and makes host actions that need the user's
@@ -293,22 +316,42 @@ const DEFAULT_HOSTREACH_WAIT_MS = 25_000;
 /** Ceiling for a client-requested hold, for the same proxy reason. */
 const MAX_HOSTREACH_WAIT_MS = 60_000;
 
-function parseRegistrationProfiles(value: unknown): { ok: true; value: { agentId: string; profileId: string }[] } | { ok: false; error: string } {
+function parseRegistrationProfiles(
+  value: unknown,
+): { ok: true; value: { agentId: string; profileId: string }[] } | { ok: false; error: string } {
   if (value === undefined) return { ok: true, value: [] };
   if (!Array.isArray(value)) return { ok: false, error: 'credentialProfiles must be an array' };
   const seen = new Set<string>();
   const profiles: { agentId: string; profileId: string }[] = [];
   for (const entry of value) {
-    if (!entry || typeof entry !== 'object') return { ok: false, error: 'credentialProfiles has invalid entry' };
+    if (!entry || typeof entry !== 'object')
+      return { ok: false, error: 'credentialProfiles has invalid entry' };
     const { agentId, profileId } = entry as { agentId?: unknown; profileId?: unknown };
-    if (typeof agentId !== 'string' || typeof profileId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(agentId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profileId) || seen.has(agentId)) return { ok: false, error: 'credentialProfiles must select one valid profile per agent' };
-    seen.add(agentId); profiles.push({ agentId, profileId });
+    if (
+      typeof agentId !== 'string' ||
+      typeof profileId !== 'string' ||
+      !/^[a-z][a-z0-9-]{0,63}$/.test(agentId) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profileId) ||
+      seen.has(agentId)
+    )
+      return { ok: false, error: 'credentialProfiles must select one valid profile per agent' };
+    seen.add(agentId);
+    profiles.push({ agentId, profileId });
   }
   return { ok: true, value: profiles.sort((a, b) => a.agentId.localeCompare(b.agentId)) };
 }
-function sameProfiles(a: readonly { agentId: string; profileId: string }[] | undefined, b: readonly { agentId: string; profileId: string }[]): boolean {
+function sameProfiles(
+  a: readonly { agentId: string; profileId: string }[] | undefined,
+  b: readonly { agentId: string; profileId: string }[],
+): boolean {
   const left = [...(a ?? [])].sort((x, y) => x.agentId.localeCompare(y.agentId));
-  return left.length === b.length && left.every((entry, index) => entry.agentId === b[index]?.agentId && entry.profileId === b[index]?.profileId);
+  return (
+    left.length === b.length &&
+    left.every(
+      (entry, index) =>
+        entry.agentId === b[index]?.agentId && entry.profileId === b[index]?.profileId,
+    )
+  );
 }
 
 function send(
@@ -494,7 +537,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
           log,
           custody: opts.custody ?? null,
           profileForBox: (boxId, agent) => {
-            const matches = (registry.get(boxId)?.credentialProfiles ?? []).filter((profile) => profile.agentId === agent);
+            const matches = (registry.get(boxId)?.credentialProfiles ?? []).filter(
+              (profile) => profile.agentId === agent,
+            );
             return matches.length === 1 ? matches[0]! : null;
           },
         });
@@ -513,13 +558,24 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
   const leaser = githubAppConfig ? new GitHubAppLeaser(githubAppConfig) : null;
   const custody = opts.custody ?? null;
   const custodyAdminToken = opts.adminToken ?? '';
-  const profileUsageToken = opts.profileUsageToken ?? process.env['AGENTBOX_PROFILE_USAGE_TOKEN'] ?? '';
+  const profileUsageToken =
+    opts.profileUsageToken ?? process.env['AGENTBOX_PROFILE_USAGE_TOKEN'] ?? '';
+  const capabilityPreparation = opts.capabilityPreparation ?? null;
+  const capabilityPreparationToken = opts.capabilityPreparationToken ?? '';
+  const capabilityJournal = capabilityPreparation?.journal ?? new FsOperationJournal();
   const profileProfiles = custody ? new CredentialProfileStore(custody) : null;
   const profileLifecycle = profileProfiles
-    ? new ProfileLifecycle(profileProfiles, opts.profileHomeRoot ?? join(dirname(DEFAULT_CUSTODY_DIR), 'profile-homes'))
+    ? new ProfileLifecycle(
+        profileProfiles,
+        opts.profileHomeRoot ?? join(dirname(DEFAULT_CUSTODY_DIR), 'profile-homes'),
+      )
     : null;
   const profileUsage = profileProfiles
-    ? new ProfileUsageService(profileProfiles, opts.profileUsageHelper ?? null, profileLifecycle ?? undefined)
+    ? new ProfileUsageService(
+        profileProfiles,
+        opts.profileUsageHelper ?? null,
+        profileLifecycle ?? undefined,
+      )
     : null;
   const custodyMaxBodyBytes =
     typeof opts.custodyMaxBodyBytes === 'number' && opts.custodyMaxBodyBytes > 0
@@ -556,6 +612,191 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'relay'}`);
     const route = `${req.method ?? 'GET'} ${url.pathname}`;
+
+    if (route === 'POST /api/v1/internal/capabilities/prepare') {
+      if (!capabilityPreparation) {
+        send(res, 503, {
+          error: {
+            code: 'backend_unavailable',
+            message: 'capability preparation is not configured on this host',
+          },
+        });
+        return;
+      }
+      const presented = bearerToken(req);
+      if (
+        capabilityPreparationToken.length === 0 ||
+        presented.length === 0 ||
+        !timingSafeEqualStr(presented, capabilityPreparationToken)
+      ) {
+        send(res, 401, { error: { code: 'unauthorized', message: 'invalid capability token' } });
+        return;
+      }
+      const body = await readJsonBody<Record<string, unknown>>(req);
+      const keys = body && typeof body === 'object' ? Object.keys(body).sort() : [];
+      if (
+        !body ||
+        keys.join(',') !== 'boxId,capabilityProfileId,operationKey' ||
+        typeof body.boxId !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(body.boxId) ||
+        typeof body.capabilityProfileId !== 'string' ||
+        !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/.test(body.capabilityProfileId) ||
+        body.capabilityProfileId.length > 128 ||
+        typeof body.operationKey !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(body.operationKey)
+      ) {
+        send(res, 400, {
+          error: {
+            code: 'invalid_request',
+            message:
+              'expected exactly {boxId, capabilityProfileId, operationKey}; commands, images, providers, and allocation claims are not accepted',
+          },
+        });
+        return;
+      }
+
+      const request = {
+        boxId: body.boxId,
+        capabilityProfileId: body.capabilityProfileId,
+      };
+      const existing = await capabilityJournal.read(body.operationKey);
+      if (
+        existing &&
+        (existing.kind !== 'capability.prepare' ||
+          existing.requestHash !== operationRequestHash('capability.prepare', request))
+      ) {
+        send(res, 409, {
+          error: {
+            code: 'conflict',
+            message: `idempotency key '${body.operationKey}' was already used for a different request`,
+            details: { operation: existing },
+          },
+        });
+        return;
+      }
+
+      const profile = await capabilityPreparation.profiles.resolve(body.capabilityProfileId);
+      if (!profile || profile.id !== body.capabilityProfileId) {
+        send(res, 404, {
+          error: { code: 'not_found', message: 'capability profile is not approved on this host' },
+        });
+        return;
+      }
+      const registration = await store.getBox(body.boxId);
+      if (!registration) {
+        send(res, 404, { error: { code: 'not_found', message: 'approved box not found' } });
+        return;
+      }
+      const target = await capabilityPreparation.targets.verify(registration);
+      if (!target || !capabilityTargetMatchesRegistration(target, registration)) {
+        send(res, 409, {
+          error: {
+            code: 'conflict',
+            message: 'box is not an approved non-production standing slot or its endpoint changed',
+          },
+        });
+        return;
+      }
+
+      const queued = await enqueueCapabilityPrepareJob({
+        boxId: body.boxId,
+        capabilityProfileId: body.capabilityProfileId,
+        operationKey: body.operationKey,
+        providerName: target.endpoint.backend,
+      });
+      if (
+        queued.job.kind !== 'capability-prepare' ||
+        queued.job.providerName !== target.endpoint.backend ||
+        queued.job.capabilityPrepare?.boxId !== body.boxId ||
+        queued.job.capabilityPrepare.capabilityProfileId !== body.capabilityProfileId ||
+        queued.job.capabilityPrepare.operationKey !== body.operationKey
+      ) {
+        send(res, 409, {
+          error: {
+            code: 'conflict',
+            message: 'durable capability job identity conflicts with this request',
+          },
+        });
+        return;
+      }
+      const running = {
+        ...queued.job,
+        status: 'running' as const,
+        startedAt: queued.job.startedAt ?? new Date().toISOString(),
+      };
+      await writeJob(running);
+      try {
+        const out = await runJournaledOperation<CapabilityPreparationOutcome>({
+          journal: capabilityJournal,
+          key: body.operationKey,
+          kind: 'capability.prepare',
+          request,
+          reconcile: (entry) => profile.reconcile(target, entry.tag),
+          effect: (entry) => profile.prepare(target, entry.tag),
+          ...(capabilityPreparation.crashAt ? { crashAt: capabilityPreparation.crashAt } : {}),
+        });
+        const terminal = {
+          ...running,
+          status: out.result.status === 'ready' ? ('done' as const) : ('failed' as const),
+          finishedAt: new Date().toISOString(),
+          ...(out.result.status === 'failed' ? { reason: 'capability-not-ready' } : {}),
+          capabilityPrepare: {
+            ...running.capabilityPrepare!,
+            result: {
+              status: out.result.status,
+              readiness: out.result.readiness,
+              cleanup: out.result.cleanup,
+            },
+          },
+        };
+        await writeJob(terminal);
+        if (out.result.status === 'failed') {
+          send(res, 409, {
+            error: {
+              code: 'capability_not_ready',
+              message: 'reviewed capability preparation did not pass readiness',
+              details: { jobId: terminal.id, result: out.result },
+            },
+          });
+          return;
+        }
+        send(res, 200, {
+          jobId: terminal.id,
+          operationTag: out.tag,
+          replayed: out.replayed,
+          standingSlotId: target.standingSlotId,
+          result: out.result,
+        });
+        return;
+      } catch (error) {
+        if (error instanceof OperationConflictError || error instanceof OperationBlockedError) {
+          send(res, 409, {
+            error: {
+              code: 'conflict',
+              message: error.message,
+              details: { operation: error.entry },
+            },
+          });
+          return;
+        }
+        // An unknown error can be a crash after provider commit. Keep both the
+        // journal and job pending/running; an identical retry must reconcile
+        // the provider-visible operation tag before any second effect.
+        log(
+          `capability-prepare: operation ${body.operationKey} awaits reconciliation: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        send(res, 500, {
+          error: {
+            code: 'internal',
+            message: 'capability preparation interrupted; retry the identical operation key',
+            details: { jobId: capabilityPrepareJobId(body.operationKey) },
+          },
+        });
+        return;
+      }
+    }
 
     if (route === 'GET /healthz') {
       // `cliEntry` and `pid` let the host-side `ensureRelay` distinguish a
@@ -835,7 +1076,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
 
     // Profile usage is intentionally separate from custody. It exposes only
     // normalized metadata and a dedicated bearer cannot read credential bytes.
-    const usageMatch = /^\/api\/v1\/credential-profiles\/([a-z][a-z0-9-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/usage$/.exec(url.pathname);
+    const usageMatch =
+      /^\/api\/v1\/credential-profiles\/([a-z][a-z0-9-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/usage$/.exec(
+        url.pathname,
+      );
     if (usageMatch) {
       if (profileUsageToken.length === 0 || !profileUsage) {
         send(res, 503, { error: 'profile usage unavailable' });
@@ -1662,7 +1906,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
         return;
       }
       const existingRegistration = await store.getBox(body.boxId);
-      if (existingRegistration && !sameProfiles(existingRegistration.credentialProfiles, credentialProfiles.value)) {
+      if (
+        existingRegistration &&
+        !sameProfiles(existingRegistration.credentialProfiles, credentialProfiles.value)
+      ) {
         send(res, 409, { error: 'credential profile mapping conflicts with durable registration' });
         return;
       }
@@ -1682,7 +1929,9 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
         token: body.token,
         name: body.name,
         kind,
-        ...(credentialProfiles.value.length > 0 ? { credentialProfiles: credentialProfiles.value } : {}),
+        ...(credentialProfiles.value.length > 0
+          ? { credentialProfiles: credentialProfiles.value }
+          : {}),
         backend:
           typeof body.backend === 'string' && body.backend.length > 0 ? body.backend : undefined,
         sandboxId:

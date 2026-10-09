@@ -1,6 +1,6 @@
 import { recordCreateJobTimeline } from './timeline-hooks.js';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync } from 'node:fs';
 import { join } from 'node:path';
@@ -86,7 +86,7 @@ export interface QueueJob {
    * surfaces as a box in the dashboard. Prepare jobs carry `prepare` (not the
    * agent/create fields, which hold inert placeholders).
    */
-  kind?: 'create' | 'prepare';
+  kind?: 'create' | 'prepare' | 'capability-prepare';
   agent: QueueAgentKind;
   status: QueueJobStatus;
   /** Friendly box name the worker should create the box under. */
@@ -162,6 +162,8 @@ export interface QueueJob {
   login?: QueueJobLogin;
   /** Bake options for a `kind: 'prepare'` job (see {@link QueueJobPrepare}). */
   prepare?: QueueJobPrepare;
+  /** Closed request/result for preparing one reviewed capability in an existing box. */
+  capabilityPrepare?: QueueJobCapabilityPrepare;
 }
 
 /**
@@ -190,6 +192,21 @@ export interface QueueJobLogin {
  * `--size` / `--location` / `--name` flags ride here so one route serves every
  * bake shape.
  */
+export interface QueueJobCapabilityPrepare {
+  boxId: string;
+  capabilityProfileId: string;
+  operationKey: string;
+  result?: {
+    status: 'ready' | 'failed';
+    readiness: {
+      ready: boolean;
+      checks: Array<{ id: string; status: 'passed' | 'failed' }>;
+      observedAt: string;
+    };
+    cleanup: { attempted: boolean; succeeded: boolean };
+  };
+}
+
 export interface QueueJobPrepare {
   /** Rebuild even if the base image/snapshot already exists. */
   force?: boolean;
@@ -429,6 +446,53 @@ export async function enqueueQueueJob(input: EnqueueQueueJobInput): Promise<Enqu
   return { job, runningCount, maxConcurrent: ceiling };
 }
 
+export interface EnqueueCapabilityPrepareJobInput {
+  boxId: string;
+  capabilityProfileId: string;
+  operationKey: string;
+  providerName: string;
+}
+
+export function capabilityPrepareJobId(operationKey: string): string {
+  return `capability-${createHash('sha256').update(operationKey).digest('hex').slice(0, 24)}`;
+}
+
+/**
+ * Persist the closed capability request before its reviewed provider effect.
+ * The operation key deterministically names the manifest, so a process crash
+ * followed by an identical retry addresses the same job rather than allocating
+ * a second one. Execution stays in the server-owned profile registry; this
+ * manifest deliberately has no command/image/provider-option fields.
+ */
+export async function enqueueCapabilityPrepareJob(
+  input: EnqueueCapabilityPrepareJobInput,
+): Promise<{ job: QueueJob; created: boolean }> {
+  const id = capabilityPrepareJobId(input.operationKey);
+  const existing = await readJob(id);
+  if (existing) return { job: existing, created: false };
+  const job: QueueJob = {
+    id,
+    kind: 'capability-prepare',
+    agent: 'claude-code',
+    status: 'queued',
+    boxName: '',
+    providerName: input.providerName,
+    prompt: '',
+    agentArgs: [],
+    createOpts: { workspace: STATE_DIR },
+    maxConcurrent: 1,
+    createdAt: new Date().toISOString(),
+    logPath: queueLogPath(id),
+    capabilityPrepare: {
+      boxId: input.boxId,
+      capabilityProfileId: input.capabilityProfileId,
+      operationKey: input.operationKey,
+    },
+  };
+  await writeJob(job);
+  return { job, created: true };
+}
+
 export interface EnqueuePrepareJobInput {
   /** Provider to bake (docker | daytona | hetzner | vercel | e2b | plugin). */
   providerName: string;
@@ -512,8 +576,14 @@ export async function deleteJob(id: string): Promise<void> {
  * Read every job manifest in the queue dir. Skips temp files (atomic-rename
  * leftovers) and entries that fail to parse — the loop must never crash on a
  * malformed file. Sorted by `createdAt` ascending for FIFO selection.
+ *
+ * Private capability manifests are excluded by default. They are resumed by an
+ * identical authenticated operation-key request, not by the general CLI worker,
+ * and must not appear as synthetic create boxes in existing queue consumers.
  */
-export async function loadQueue(): Promise<QueueJob[]> {
+export async function loadQueue(opts?: {
+  includeCapabilityPreparation?: boolean;
+}): Promise<QueueJob[]> {
   let entries: string[];
   try {
     entries = await readdir(QUEUE_DIR);
@@ -526,7 +596,11 @@ export async function loadQueue(): Promise<QueueJob[]> {
     if (!name.endsWith('.json')) continue;
     try {
       const raw = await readFile(join(QUEUE_DIR, name), 'utf8');
-      out.push(JSON.parse(raw) as QueueJob);
+      const parsed = JSON.parse(raw) as QueueJob;
+      if (parsed.kind === 'capability-prepare' && opts?.includeCapabilityPreparation !== true) {
+        continue;
+      }
+      out.push(parsed);
     } catch {
       // skip malformed — surfaced via tick log if it stays put
     }
@@ -545,7 +619,7 @@ export function selectNextRunnable(jobs: QueueJob[], runningCount: number): Queu
   // jobs is FIFO by createdAt already (loadQueue sorts).
   for (const j of jobs) {
     if (j.status !== 'queued') continue;
-    if (j.kind === 'prepare') continue; // prepare has its own lane
+    if (j.kind !== undefined && j.kind !== 'create') continue; // non-create jobs have their own lanes
     if (j.foreground) continue; // foreground has its own lane (ungated)
     if (runningCount < j.maxConcurrent) return j;
   }
@@ -563,7 +637,7 @@ export function selectNextRunnable(jobs: QueueJob[], runningCount: number): Queu
 export function selectNextRunnableForeground(jobs: QueueJob[]): QueueJob | null {
   for (const j of jobs) {
     if (j.status !== 'queued') continue;
-    if (j.kind === 'prepare') continue;
+    if (j.kind !== undefined && j.kind !== 'create') continue;
     if (!j.foreground) continue;
     return j;
   }
@@ -690,7 +764,7 @@ export function selectNextRunnableByWorking(
 ): QueueJob | null {
   for (const j of jobs) {
     if (j.status !== 'queued') continue;
-    if (j.kind === 'prepare') continue; // prepare has its own lane
+    if (j.kind !== undefined && j.kind !== 'create') continue; // non-create jobs have their own lanes
     if (j.foreground) continue; // foreground has its own lane (ungated)
     const ceil =
       typeof j.maxWorking === 'number' && j.maxWorking > 0 ? j.maxWorking : globalMaxWorking;
@@ -1042,6 +1116,10 @@ async function recoverOrphanedWorkers(
   const jobs = await loadQueue();
   for (const j of jobs) {
     if (j.status !== 'running') continue;
+    // Capability effects run in-process and intentionally remain `running`
+    // after an indeterminate crash. The next identical operation-key request
+    // reconciles the provider-visible tag before deciding whether to retry.
+    if (j.kind === 'capability-prepare') continue;
     if (typeof j.pid === 'number' ? processAlive(j.pid) : requirePid) continue;
     const failed: QueueJob = {
       ...j,
@@ -1142,7 +1220,7 @@ export async function defaultCountWorkingBoxes(
 export function countInFlightCreateJobs(jobs: QueueJob[], accountedBoxIds: Set<string>): number {
   let n = 0;
   for (const j of jobs) {
-    if (j.kind === 'prepare') continue; // a bake is not a box
+    if (j.kind !== undefined && j.kind !== 'create') continue; // artifact jobs are not boxes
     if (j.status !== 'running') continue;
     if (j.boxId && accountedBoxIds.has(j.boxId)) continue; // counted via its box
     if (typeof j.pid === 'number' && !processAlive(j.pid)) continue; // dead worker
@@ -1284,6 +1362,11 @@ async function defaultSpawnWorker(job: QueueJob): Promise<number | null> {
   await mkdir(join(STATE_DIR, 'logs'), { recursive: true });
   const fd = openSync(job.logPath, 'a');
   // A prepare (image-bake) job runs a different worker; both stream to logPath.
+  if (job.kind === 'capability-prepare') {
+    throw new Error(
+      'capability preparation must run through the server-owned reviewed profile registry',
+    );
+  }
   const command = job.kind === 'prepare' ? '_run-queued-prepare' : '_run-queued-job';
   // Pin an explicit cwd. Without one the worker inherits the daemon's, and this
   // daemon is long-lived while its own directory is not: `npm install -g` (what

@@ -28,6 +28,16 @@ export {
 } from './detached-agent.js';
 export { kickCloudBootstrap, type KickCloudBootstrapArgs } from './bootstrap-launch.js';
 export {
+  prepareCloudCapability,
+  type ApprovedCloudCapabilityTarget,
+  type CapabilityPreparationBackend,
+  type CapabilityPreparationOutcome,
+  type CapabilityReadiness,
+  type CloudCapabilityReconcileResult,
+  type ReviewedCloudCapabilityContext,
+  type ReviewedCloudCapabilityProfile,
+} from './capability-prepare.js';
+export {
   registerBoxWithPlane,
   readGitOriginUrl,
   type RegisterBoxWithPlaneArgs,
