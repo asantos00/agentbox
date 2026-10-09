@@ -409,6 +409,7 @@ export function createCloudProvider(
       autoApproveHostActions: box.autoApproveHostActions,
       autoApproveSafeHostActions: box.autoApproveSafeHostActions,
       agent: box.agents?.[0] ?? box.lastAgent,
+      credentialProfiles: box.credentialProfiles,
     });
   }
 
@@ -660,6 +661,7 @@ export function createCloudProvider(
             image: box.cloud.image,
             webPort: box.cloud.webPort,
             agent: box.lastAgent,
+            credentialProfiles: box.credentialProfiles,
             projectSlug: projectSlugFromOriginUrl(originUrl) ?? undefined,
           });
         } catch {
@@ -685,6 +687,7 @@ export function createCloudProvider(
           // by origin (Step 4 adoption); best-effort.
           originUrl: await readGitOriginUrl(box.workspacePath).catch(() => undefined),
           agent: box.agents?.[0] ?? box.lastAgent,
+          credentialProfiles: box.credentialProfiles,
         });
       } catch {
         // best-effort
@@ -1403,6 +1406,7 @@ export function createCloudProvider(
                 ? req.inBoxClone.originUrl
                 : await readGitOriginUrl(req.workspacePath).catch(() => undefined),
               agent: req.agents?.[0] ?? req.agent,
+              credentialProfiles: req.credentialProfiles,
             });
           } catch (err) {
             log(

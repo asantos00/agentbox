@@ -872,6 +872,7 @@ export async function createBox(opts: CreateBoxOptions): Promise<CreatedBox> {
         autoApproveSafeHostActions,
         originUrl,
         agent: opts.agents?.[0],
+        credentialProfiles: opts.credentialProfiles,
       });
       log(`registered box token with relay`);
     } catch (err) {

@@ -18,6 +18,8 @@
  */
 
 import { execa } from 'execa';
+import type { CredentialProfileSelection } from '@agentbox/core';
+import { CredentialProfileStore } from './custody/profiles.js';
 import {
   parseCredentialsUpdate,
   readCredentialBackup,
@@ -44,6 +46,10 @@ export interface CredentialsFanoutDeps {
    * seeds from a current copy rather than the last one a PC pushed.
    */
   custody?: CredentialCustodyWriter | null;
+  /** Resolves structured metadata recorded for the source box; never trusts event payload selection. */
+  profileForBox?: (boxId: string, agent: CredentialAgentKind) => CredentialProfileSelection | null;
+  /** Delivers a refresh only to boxes recorded with this exact structured profile. */
+  runProfilePropagate?: (selection: CredentialProfileSelection, sourceBoxId: string) => Promise<void>;
 }
 
 /** The single write this needs from a custody store (structural: no import cycle). */
@@ -62,7 +68,9 @@ export class CredentialsFanout {
   private readonly runPropagate: (agent: CredentialAgentKind, sourceBoxId: string) => Promise<void>;
   private readonly backupPathFor?: (agent: CredentialAgentKind) => string;
   private readonly custody: CredentialCustodyWriter | null;
-  private readonly pending = new Map<CredentialAgentKind, NodeJS.Timeout>();
+  private readonly profileForBox?: (boxId: string, agent: CredentialAgentKind) => CredentialProfileSelection | null;
+  private readonly runProfilePropagate?: (selection: CredentialProfileSelection, sourceBoxId: string) => Promise<void>;
+  private readonly pending = new Map<string, NodeJS.Timeout>();
   private readonly chains = new Map<CredentialAgentKind, Promise<void>>();
 
   constructor(deps: CredentialsFanoutDeps) {
@@ -71,6 +79,8 @@ export class CredentialsFanout {
     this.runPropagate = deps.runPropagate ?? defaultRunPropagate;
     this.backupPathFor = deps.backupPathFor;
     this.custody = deps.custody ?? null;
+    this.profileForBox = deps.profileForBox;
+    this.runProfilePropagate = deps.runProfilePropagate ?? defaultRunProfilePropagate;
   }
 
   /**
@@ -80,6 +90,24 @@ export class CredentialsFanout {
   async handle(sourceBoxId: string, payload: unknown): Promise<CredentialsHandleResult> {
     const update = parseCredentialsUpdate(payload);
     if (!update) return { accepted: false, reason: 'invalid payload' };
+    const selection = this.profileForBox?.(sourceBoxId, update.agent) ?? null;
+    // Structured boxes never write a named identity through the legacy shared
+    // backup. The exact selected profile is the only mutable record.
+    if (selection) {
+      if (!this.custody || !('get' in this.custody) || !('stat' in this.custody) || !('delete' in this.custody)) {
+        return { accepted: false, reason: 'profile custody unavailable' };
+      }
+      const profiles = new CredentialProfileStore(this.custody as unknown as import('./custody/store.js').CustodyStore);
+      const current = await profiles.get(selection);
+      if (!current || current.health !== 'active') return { accepted: false, reason: 'profile unavailable' };
+      try {
+        await profiles.update(selection, Buffer.from(update.content, 'utf8'), current.sha256);
+        this.schedule(`${selection.agentId}\u0000${selection.profileId}`, update.agent, sourceBoxId, selection);
+        return { accepted: true, reason: 'profile updated' };
+      } catch {
+        return { accepted: false, reason: 'profile changed concurrently' };
+      }
+    }
     const backupPath = this.backupPathFor?.(update.agent);
     const existing = await readCredentialBackup(update.agent, { backupPath });
     const verdict = shouldAcceptCredentialUpdate(update.agent, update.content, existing);
@@ -91,7 +119,7 @@ export class CredentialsFanout {
     this.log(
       `credentials: accepted ${update.agent} update from box ${sourceBoxId} (${verdict.reason}); fan-out in ${String(this.debounceMs)}ms`,
     );
-    this.schedule(update.agent, sourceBoxId);
+    this.schedule(update.agent, update.agent, sourceBoxId);
     return { accepted: true, reason: verdict.reason };
   }
 
@@ -128,23 +156,26 @@ export class CredentialsFanout {
     }
   }
 
-  private schedule(agent: CredentialAgentKind, sourceBoxId: string): void {
-    const existing = this.pending.get(agent);
+  private schedule(key: string, agent: CredentialAgentKind, sourceBoxId: string, selection?: CredentialProfileSelection): void {
+    const existing = this.pending.get(key);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
-      this.pending.delete(agent);
-      const prev = this.chains.get(agent) ?? Promise.resolve();
+      this.pending.delete(key);
+      const prev = this.chains.get(key) ?? Promise.resolve();
       const next = prev
-        .then(() => this.runPropagate(agent, sourceBoxId))
+        .then(() => {
+          if (!selection) return this.runPropagate(agent, sourceBoxId);
+          return this.runProfilePropagate!(selection, sourceBoxId);
+        })
         .catch((err: unknown) => {
           this.log(
             `credentials: ${agent} fan-out failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         });
-      this.chains.set(agent, next);
+      this.chains.set(key, next);
     }, this.debounceMs);
     timer.unref();
-    this.pending.set(agent, timer);
+    this.pending.set(key, timer);
   }
 
   /** Pending debounce timers + in-flight chain, for tests/shutdown. */
@@ -163,6 +194,13 @@ export class CredentialsFanout {
  * started with — the CLI owns provider resolution and per-box transports
  * (same pattern as the checkpoint/cp host actions).
  */
+async function defaultRunProfilePropagate(selection: CredentialProfileSelection, sourceBoxId: string): Promise<void> {
+  const entry = process.env['AGENTBOX_CLI_ENTRY'];
+  if (!entry) throw new Error('AGENTBOX_CLI_ENTRY not set; cannot run structured credential propagation');
+  const result = await execa(process.execPath, [entry, 'credentials', 'propagate', '--agent', selection.agentId, '--profile', selection.profileId, '--source-box', sourceBoxId], { reject: false, timeout: 300_000 });
+  if (result.exitCode !== 0) throw new Error(`structured credential propagation exited ${String(result.exitCode)}`);
+}
+
 async function defaultRunPropagate(agent: CredentialAgentKind, sourceBoxId: string): Promise<void> {
   const entry = process.env['AGENTBOX_CLI_ENTRY'];
   if (!entry) {

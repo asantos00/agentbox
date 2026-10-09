@@ -16,7 +16,9 @@ import {
   unpauseBox,
   type BoxRecord,
 } from '@agentbox/sandbox-docker';
+import { createDockerSyncTransport } from '@agentbox/sandbox-docker';
 import { runModelAuthIngest } from '@agentbox/sandbox-core';
+import { CredentialProfileStore, FsCustodyStore, stageCredentialProfile } from '@agentbox/relay';
 import type { Command } from 'commander';
 import { intro, log, outro, spinner } from '@agentbox/cli-kit';
 import { reattachRef, resolveBoxOrExit, resolveBoxOrShift } from '../../box-ref.js';
@@ -176,11 +178,24 @@ async function startOrAttach(
     onProgress: (line) => s.message(clampSpinnerLine(line)),
   });
 
+  // Structured named profiles bypass the legacy shared host backup and stage
+  // directly after install, before ingest/tmux. The box record carries only IDs.
+  const credentialProfiles = box.credentialProfiles ?? [];
+  if (credentialProfiles.length > 0) {
+    for (const selection of credentialProfiles) {
+      const allowed = a.spec.modelAuth?.sources.some((source) => source.kind === 'agent' && source.agent === selection.agentId);
+      if (!allowed) throw new Error('credential profile is not a declared model-auth source for this agent');
+    }
+    const profiles = new CredentialProfileStore(new FsCustodyStore());
+    const transport = createDockerSyncTransport({ container: box.container, image: box.image });
+    for (const selection of credentialProfiles) await stageCredentialProfile(profiles, transport, selection);
+  }
+
   // Re-run the model-auth ingest before the session comes up. Hash-gated, so
   // this is a no-op unless the fan-out has pushed a refreshed login since the
   // last start — which is the ONLY way a seeded box's auth is renewed, because
   // the consumer cannot refresh a borrowed token itself.
-  if ((box.borrowedCredentials ?? []).length > 0) {
+  if ((box.borrowedCredentials ?? []).length > 0 || credentialProfiles.length > 0) {
     await runModelAuthIngest(
       a.spec,
       async (argv) => {

@@ -35,7 +35,7 @@ import {
 } from '@agentbox/relay/control-plane';
 // The full library entry: the timeline sink is host-side state, not part of the
 // lean control-plane surface the Next app imports.
-import { timelineSink } from '@agentbox/relay';
+import { stageCredentialProfile, timelineSink } from '@agentbox/relay';
 import {
   AGENT_SYNC_SPECS,
   boxNameBasisFromOriginUrl,
@@ -50,7 +50,7 @@ import {
   startDetachedCloudAgent,
   type MaterializedCarryEntry,
 } from '@agentbox/sandbox-cloud';
-import { resolveAgentLauncher, toQueueKind, type ResolvedCarryEntry } from '@agentbox/core';
+import { resolveAgentLauncher, toQueueKind, type ResolvedCarryEntry, type SyncTransport } from '@agentbox/core';
 import { hydratePreparedFromCustody } from './prepared-hydrate.js';
 import { HUB_WORKER_CLONE_PREFIX } from './boxes/project-key.js';
 import { createStartsSession, resolveCreateAgentSpec } from './boxes/create-agent.js';
@@ -332,7 +332,9 @@ export function makeHubCreateBox(opts: HubWorkerOptions): CreateBoxFn {
       if (mod.ensureCredentials) await mod.ensureCredentials();
       // Seed agent creds from custody just before create, so provider.create's
       // seed step reads a logged-in host backup.
-      await seedHostBackupsFromCustody(custody, log);
+      // Structured profiles stage directly at launch. They must never pass
+      // through shared host backups, which are the legacy default-only path.
+      if (credentialProfiles.length === 0) await seedHostBackupsFromCustody(custody, log);
       // Likewise the base image: the deploy seeds `prepared/<provider>.json`
       // into custody, but the provider's baked-or-not gate only reads local
       // prepared-state — so without this a fresh control box refuses to create.
@@ -440,6 +442,13 @@ export function makeHubCreateBox(opts: HubWorkerOptions): CreateBoxFn {
             // cannot find.
             sessionName: createOpts?.sessionName?.trim() || boxAgent,
             extraArgs,
+            ...(credentialProfiles.length > 0
+              ? { stageCredentialProfiles: async (transport: SyncTransport) => {
+                  for (const selection of credentialProfiles) {
+                    await stageCredentialProfile(profileStore, transport, selection);
+                  }
+                } }
+              : {}),
           });
           log(`${boxAgent} session is running in ${created.record.name}`);
         } catch (err) {

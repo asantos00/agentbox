@@ -58,6 +58,7 @@ export interface RegisterBoxWithPlaneArgs {
   webPort?: number;
   /** Agent the box was created for, so an adopting PC can relaunch the right one. */
   agent?: string;
+  credentialProfiles?: { agentId: string; profileId: string }[];
   /** Custody `projects/<slug>` key linking the box to its seed material. */
   projectSlug?: string;
 }
@@ -100,6 +101,7 @@ export async function registerBoxWithPlane(args: RegisterBoxWithPlaneArgs): Prom
       image: args.image,
       webPort: args.webPort,
       agent: args.agent,
+      credentialProfiles: args.credentialProfiles,
       projectSlug: args.projectSlug,
     }),
   });

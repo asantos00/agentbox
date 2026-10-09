@@ -41,6 +41,7 @@ import {
   type ExecResult,
   type PromptAnswer,
   type Provider,
+  type SyncTransport,
   providerWarning,
 } from '@agentbox/core';
 import type { BoxStatus as CtlBoxStatus, StatusReply } from '@agentbox/ctl';
@@ -50,14 +51,17 @@ import { createGithubPrSync } from './backend/github-prs';
 import { createManagerBackend } from './backend/managers';
 import { createTimelineBackend, withBoxTimeline } from './backend/timeline';
 import { createWorkspaceBackend } from './backend/workspaces';
+import { validateCredentialProfileSelections } from './credential-profile-selection.js';
 import type { BackendDeps } from './backend/deps';
 import {
   configureBoxPushStat,
   deleteJob,
   enqueuePrepareJob,
   enqueueQueueJob,
+  CredentialProfileStore,
   FsCustodyStore,
   hashRpcParams,
+  stageCredentialProfile,
   isValidBoxStatus,
   loadQueue,
   queueLogPath,
@@ -2517,6 +2521,17 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
           input.prompt ?? '',
           input.args ?? [],
         );
+        const credentialProfiles = input.credentialProfiles ?? resolved.box.credentialProfiles ?? [];
+        try {
+          validateCredentialProfileSelections(spec, credentialProfiles);
+        } catch {
+          return { ok: false, error: 'credential profile is unavailable' };
+        }
+        const profileStore = new CredentialProfileStore(new FsCustodyStore());
+        for (const selection of credentialProfiles) {
+          const profile = await profileStore.get(selection);
+          if (!profile || profile.health !== 'active') return { ok: false, error: 'credential profile is unavailable' };
+        }
         let installed = false;
         await startDetachedCloudAgent({
           provider: resolved.provider,
@@ -2527,11 +2542,20 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
           onInstalled: (value) => {
             installed = value;
           },
+          ...(credentialProfiles.length > 0
+            ? { stageCredentialProfiles: async (transport: SyncTransport) => {
+                for (const selection of credentialProfiles) {
+                  await stageCredentialProfile(profileStore, transport, selection);
+                }
+              } }
+            : {}),
         });
         await mutateState((state) => ({
           ...state,
           boxes: state.boxes.map((box) =>
-            box.id === resolved.box.id ? { ...box, lastAgent: input.agent } : box,
+            box.id === resolved.box.id
+              ? { ...box, lastAgent: input.agent, ...(credentialProfiles.length ? { credentialProfiles } : {}) }
+              : box,
           ),
         }));
         return { ok: true, agent: input.agent, sessionName, sessionLabel, installed };

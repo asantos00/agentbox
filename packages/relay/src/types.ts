@@ -1,7 +1,7 @@
 // DownloadKind's canonical decision home is `@agentbox/core`'s sync/files.ts;
 // imported here so DownloadRpcParams below can reference it, re-exported below
 // so existing `./types.js` importers stay unchanged.
-import type { DownloadKind, PromptDetail, PromptKind as CorePromptKind } from '@agentbox/core';
+import type { CredentialProfileSelection, DownloadKind, PromptDetail, PromptKind as CorePromptKind } from '@agentbox/core';
 
 export const DEFAULT_RELAY_PORT = 8787;
 /**
@@ -32,6 +32,8 @@ export interface BoxRegistration {
    * treated as 'docker'.
    */
   kind?: BoxKind;
+  /** Server-verified structured profile selections recorded with this box. */
+  credentialProfiles?: CredentialProfileSelection[];
   /**
    * For `kind === 'cloud'`: which cloud backend the executor must resolve
    * (e.g. 'daytona'). The host action executor lazy-imports
@@ -180,6 +182,8 @@ export interface RegisterBoxBody {
   name: string;
   /** Sandbox backend kind. Defaults to 'docker' when absent (legacy). */
   kind?: BoxKind;
+  /** Assertion only; server must compare this to durable box metadata before storing. */
+  credentialProfiles?: CredentialProfileSelection[];
   /** For cloud boxes: which backend (e.g. 'daytona'). Drives executor lazy-import. */
   backend?: string;
   /** For cloud boxes: provider-native sandbox id (SSH-key + custody dir key). */

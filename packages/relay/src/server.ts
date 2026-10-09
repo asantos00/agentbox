@@ -66,6 +66,11 @@ import { handleRemoteBoxesRequest, isRemoteBoxesPath } from './remote-boxes.js';
 import { readCreateJobLog } from './job-log-tail.js';
 import { handleStoreRpcRequest, isStoreRpcPath } from './store/store-rpc-routes.js';
 import type { CustodyStore } from './custody/store.js';
+import { CredentialProfileStore } from './custody/profiles.js';
+import { ProfileLifecycle } from './profile-lifecycle.js';
+import { ProfileUsageService, type ProfileUsageHelper } from './profile-usage.js';
+import { DEFAULT_CUSTODY_DIR } from './custody/fs-store.js';
+import { dirname, join } from 'node:path';
 import {
   isValidToolName,
   loadGrantedTools,
@@ -184,6 +189,12 @@ export interface RelayServerOptions {
    * loopback). Required for custody to serve; other admin routes are unaffected.
    */
   adminToken?: string;
+  /** Dedicated bearer for metadata-only profile usage. Never falls back to the custody admin bearer. */
+  profileUsageToken?: string;
+  /** Credential-owner helper. It receives only a validated profile selection. */
+  profileUsageHelper?: ProfileUsageHelper | null;
+  /** Server-owned root for transient isolated profile helper homes. */
+  profileHomeRoot?: string;
   /**
    * True on a control box (the hub's password profile). Turns on the
    * `/admin/hostreach/*` surface and makes host actions that need the user's
@@ -281,6 +292,24 @@ const SSE_HEARTBEAT_MS = 15_000; // every 15s; wrapper reconnects if it sees no 
 const DEFAULT_HOSTREACH_WAIT_MS = 25_000;
 /** Ceiling for a client-requested hold, for the same proxy reason. */
 const MAX_HOSTREACH_WAIT_MS = 60_000;
+
+function parseRegistrationProfiles(value: unknown): { ok: true; value: { agentId: string; profileId: string }[] } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, value: [] };
+  if (!Array.isArray(value)) return { ok: false, error: 'credentialProfiles must be an array' };
+  const seen = new Set<string>();
+  const profiles: { agentId: string; profileId: string }[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return { ok: false, error: 'credentialProfiles has invalid entry' };
+    const { agentId, profileId } = entry as { agentId?: unknown; profileId?: unknown };
+    if (typeof agentId !== 'string' || typeof profileId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(agentId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profileId) || seen.has(agentId)) return { ok: false, error: 'credentialProfiles must select one valid profile per agent' };
+    seen.add(agentId); profiles.push({ agentId, profileId });
+  }
+  return { ok: true, value: profiles.sort((a, b) => a.agentId.localeCompare(b.agentId)) };
+}
+function sameProfiles(a: readonly { agentId: string; profileId: string }[] | undefined, b: readonly { agentId: string; profileId: string }[]): boolean {
+  const left = [...(a ?? [])].sort((x, y) => x.agentId.localeCompare(y.agentId));
+  return left.length === b.length && left.every((entry, index) => entry.agentId === b[index]?.agentId && entry.profileId === b[index]?.profileId);
+}
 
 function send(
   res: ServerResponse,
@@ -459,7 +488,16 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
   // token reach custody, so the next hub create seeds a current credential
   // instead of the last one a PC pushed. Absent on a localhost relay (no store).
   const credentialsFanout =
-    mode === 'box' ? null : new CredentialsFanout({ log, custody: opts.custody ?? null });
+    mode === 'box'
+      ? null
+      : new CredentialsFanout({
+          log,
+          custody: opts.custody ?? null,
+          profileForBox: (boxId, agent) => {
+            const matches = (registry.get(boxId)?.credentialProfiles ?? []).filter((profile) => profile.agentId === agent);
+            return matches.length === 1 ? matches[0]! : null;
+          },
+        });
   if (mode === 'box' && (!opts.bridgeToken || opts.bridgeToken.length === 0)) {
     throw new Error("relay mode='box' requires a non-empty bridgeToken");
   }
@@ -475,6 +513,14 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
   const leaser = githubAppConfig ? new GitHubAppLeaser(githubAppConfig) : null;
   const custody = opts.custody ?? null;
   const custodyAdminToken = opts.adminToken ?? '';
+  const profileUsageToken = opts.profileUsageToken ?? process.env['AGENTBOX_PROFILE_USAGE_TOKEN'] ?? '';
+  const profileProfiles = custody ? new CredentialProfileStore(custody) : null;
+  const profileLifecycle = profileProfiles
+    ? new ProfileLifecycle(profileProfiles, opts.profileHomeRoot ?? join(dirname(DEFAULT_CUSTODY_DIR), 'profile-homes'))
+    : null;
+  const profileUsage = profileProfiles
+    ? new ProfileUsageService(profileProfiles, opts.profileUsageHelper ?? null, profileLifecycle ?? undefined)
+    : null;
   const custodyMaxBodyBytes =
     typeof opts.custodyMaxBodyBytes === 'number' && opts.custodyMaxBodyBytes > 0
       ? opts.custodyMaxBodyBytes
@@ -784,6 +830,28 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
         return;
       }
       send(res, 404, { error: 'not found', route });
+      return;
+    }
+
+    // Profile usage is intentionally separate from custody. It exposes only
+    // normalized metadata and a dedicated bearer cannot read credential bytes.
+    const usageMatch = /^\/api\/v1\/credential-profiles\/([a-z][a-z0-9-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/usage$/.exec(url.pathname);
+    if (usageMatch) {
+      if (profileUsageToken.length === 0 || !profileUsage) {
+        send(res, 503, { error: 'profile usage unavailable' });
+        return;
+      }
+      if (!timingSafeEqualStr(bearerToken(req) ?? '', profileUsageToken)) {
+        send(res, 401, { error: 'invalid profile usage token' });
+        return;
+      }
+      if ((req.method ?? 'GET') !== 'GET') {
+        send(res, 405, { error: 'method not allowed' });
+        return;
+      }
+      const usage = await profileUsage.get({ agentId: usageMatch[1]!, profileId: usageMatch[2]! });
+      res.setHeader('Cache-Control', 'no-store');
+      send(res, 200, usage);
       return;
     }
 
@@ -1588,6 +1656,16 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
         send(res, 400, { error: 'expected {boxId, token, name}' });
         return;
       }
+      const credentialProfiles = parseRegistrationProfiles(body.credentialProfiles);
+      if (!credentialProfiles.ok) {
+        send(res, 400, { error: credentialProfiles.error });
+        return;
+      }
+      const existingRegistration = await store.getBox(body.boxId);
+      if (existingRegistration && !sameProfiles(existingRegistration.credentialProfiles, credentialProfiles.value)) {
+        send(res, 409, { error: 'credential profile mapping conflicts with durable registration' });
+        return;
+      }
       const worktrees = sanitizeWorktrees(body.worktrees);
       // Only accept a finite positive integer; everything else (including the
       // common `undefined` from legacy boxes) drops to `undefined` and the
@@ -1604,6 +1682,7 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
         token: body.token,
         name: body.name,
         kind,
+        ...(credentialProfiles.value.length > 0 ? { credentialProfiles: credentialProfiles.value } : {}),
         backend:
           typeof body.backend === 'string' && body.backend.length > 0 ? body.backend : undefined,
         sandboxId:

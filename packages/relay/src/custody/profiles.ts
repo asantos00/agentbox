@@ -48,6 +48,16 @@ function legacyCredentialPath(selection: CredentialProfileSelection): string {
 function revocationPath(selection: CredentialProfileSelection): string {
   return `agents/${selection.agentId}/profiles/${selection.profileId}/.revoked`;
 }
+function reauthPath(selection: CredentialProfileSelection): string {
+  return `agents/${selection.agentId}/profiles/${selection.profileId}/.reauth-requested`;
+}
+
+export interface CredentialProfileReauthRequest {
+  agentId: string;
+  profileId: string;
+  requestedAt: string;
+  reason: string;
+}
 
 export function assertProfileSelection(selection: CredentialProfileSelection): void {
   if (!AGENT_ID_RE.test(selection.agentId) || !PROFILE_ID_RE.test(selection.profileId)) {
@@ -75,6 +85,16 @@ export class CredentialProfileStore {
     if (selection.profileId !== DEFAULT_CREDENTIAL_PROFILE_ID) return null;
     const legacy = await this.custody.stat(legacyCredentialPath(selection));
     return legacy ? this.metadata(selection, legacy, revoked ? 'revoked' : 'active') : null;
+  }
+
+  /** Internal credential-owner read for selected staging only; never expose through HTTP. */
+  async readForStage(selection: CredentialProfileSelection): Promise<Buffer | null> {
+    const metadata = await this.get(selection);
+    if (!metadata || metadata.health !== 'active') return null;
+    const canonical = await this.custody.get(credentialProfilePath(selection));
+    if (canonical) return canonical.data;
+    if (selection.profileId !== DEFAULT_CREDENTIAL_PROFILE_ID) return null;
+    return (await this.custody.get(legacyCredentialPath(selection)))?.data ?? null;
   }
 
   async list(agentId?: string): Promise<CredentialProfileMetadata[]> {
@@ -125,6 +145,7 @@ export class CredentialProfileStore {
       // legacy default usable and a retry is content-addressed/idempotent.
       const result = await this.custody.put(path, data);
       await this.custody.delete(revocationPath(selection));
+      await this.custody.delete(reauthPath(selection));
       return this.metadata(selection, result, 'active');
     });
   }
@@ -142,6 +163,35 @@ export class CredentialProfileStore {
       await this.custody.put(revocationPath(selection), Buffer.from('revoked', 'utf8'));
       return { ...current, health: 'revoked' };
     });
+  }
+
+  /** Persist at most one current manual reauthentication request per profile. */
+  async requestReauthentication(selection: CredentialProfileSelection, reason: string): Promise<{ created: boolean; request: CredentialProfileReauthRequest }> {
+    assertProfileSelection(selection);
+    return this.withLock(selection, async () => {
+      const existing = await this.custody.get(reauthPath(selection));
+      if (existing) {
+        try {
+          const request = JSON.parse(existing.data.toString('utf8')) as CredentialProfileReauthRequest;
+          if (request.agentId === selection.agentId && request.profileId === selection.profileId) return { created: false, request };
+        } catch { /* replace invalid local state */ }
+      }
+      const request: CredentialProfileReauthRequest = { agentId: selection.agentId, profileId: selection.profileId, requestedAt: new Date().toISOString(), reason: /^[a-z0-9_-]{1,64}$/.test(reason) ? reason : 'reauth_required' };
+      await this.custody.put(reauthPath(selection), Buffer.from(JSON.stringify(request), 'utf8'));
+      return { created: true, request };
+    });
+  }
+
+  async reauthenticationRequest(selection: CredentialProfileSelection): Promise<CredentialProfileReauthRequest | null> {
+    assertProfileSelection(selection);
+    const found = await this.custody.get(reauthPath(selection));
+    if (!found) return null;
+    try {
+      const request = JSON.parse(found.data.toString('utf8')) as CredentialProfileReauthRequest;
+      return request.agentId === selection.agentId && request.profileId === selection.profileId ? request : null;
+    } catch {
+      return null;
+    }
   }
 
   private async withLock<T>(

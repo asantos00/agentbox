@@ -354,6 +354,8 @@ export interface StartBoxAgentInput {
   args?: string[];
   sessionName?: string;
   sessionLabel?: string;
+  /** Selected model-auth profiles; stable metadata only, never credential bytes. */
+  credentialProfiles?: { agentId: string; profileId: string }[];
 }
 
 export type StartBoxAgentResult =

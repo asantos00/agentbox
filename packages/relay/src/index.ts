@@ -42,6 +42,21 @@ export {
 } from './registration-to-record.js';
 export { HostActionQueue } from './host-action-queue.js';
 export {
+  ProfileLifecycle,
+  type ProfileRefreshHelper,
+  type ProfileRefreshFailure,
+} from './profile-lifecycle.js';
+export {
+  stageCredentialProfile,
+  ProfileStageError,
+} from './profile-stage.js';
+export {
+  ProfileUsageService,
+  type ProfileUsageHelper,
+  type ProfileUsageMetadata,
+  type ProfileUsageStatus,
+} from './profile-usage.js';
+export {
   HostReachQueue,
   DEFAULT_HOST_REACH_TIMEOUT_MS,
   type HostReachOutcome,
@@ -139,6 +154,12 @@ export {
   CUSTODY_SCOPES,
 } from './custody/store.js';
 export { FsCustodyStore, DEFAULT_CUSTODY_DIR } from './custody/fs-store.js';
+export {
+  CredentialProfileStore,
+  CredentialProfileError,
+  CredentialProfileConflictError,
+  DEFAULT_CREDENTIAL_PROFILE_ID,
+} from './custody/profiles.js';
 export {
   handleCustodyRequest,
   handleCustodyBlobRequest,

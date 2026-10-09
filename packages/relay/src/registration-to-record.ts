@@ -144,6 +144,7 @@ export function registrationToBoxRecord(
     // box's live tokens (already injected in the running box).
     relayToken: existing?.relayToken ?? reg.token ?? freshToken(),
     lastAgent: normalizeRegistrationAgent(reg.agent) ?? existing?.lastAgent,
+    credentialProfiles: reg.credentialProfiles ?? existing?.credentialProfiles,
     gitWorktrees,
     createdAt: reg.createdAt ?? existing?.createdAt ?? new Date().toISOString(),
     ssh: buildSshTarget(provider, sandboxId, reg.publicHost) ?? existing?.ssh,

@@ -10,14 +10,17 @@ import {
   resolveAgentSpec,
   type AgentId,
 } from '@agentbox/sandbox-core';
-import { DEFAULT_BOX_IMAGE, volumeSettingsTarget } from '@agentbox/sandbox-docker';
+import { DEFAULT_BOX_IMAGE, volumeSettingsTarget, execInBox, inspectBox } from '@agentbox/sandbox-docker';
+import { CredentialProfileStore, FsCustodyStore, stageCredentialProfile } from '@agentbox/relay';
 import { agentConfigVolume, requireAgentCredential } from '@agentbox/core';
 import { providerForBox } from '../provider/registry.js';
 import { handleLifecycleError } from './_errors.js';
+import { propagateStructuredProfileWithDeps } from './structured-profile-propagation.js';
 
 interface PropagateOpts {
   agent: string;
   sourceBox?: string;
+  profile?: string;
 }
 
 /**
@@ -37,8 +40,13 @@ const propagateCommand = new Command('propagate')
   .description('Push the host credential backup for an agent into all other boxes')
   .requiredOption('--agent <agent>', 'claude|codex|opencode')
   .option('--source-box <id>', 'box the update came from (skipped as a target)')
+  .option('--profile <profileId>', 'named credential profile (relay-only structured propagation)')
   .action(async (opts: PropagateOpts) => {
     try {
+      if (opts.profile !== undefined) {
+        await propagateStructuredProfile(opts.agent, opts.profile, opts.sourceBox);
+        return;
+      }
       const spec = resolveAgentSpec(opts.agent);
       const agent = spec.id;
       // An agent that declares no credential has nothing to propagate and no
@@ -179,6 +187,72 @@ const propagateCommand = new Command('propagate')
       handleLifecycleError(err);
     }
   });
+
+async function propagateStructuredProfile(agentId: string, profileId: string, sourceBoxId?: string): Promise<void> {
+  const selection = { agentId: resolveAgentSpec(agentId).id, profileId };
+  const profiles = new CredentialProfileStore(new FsCustodyStore());
+  const profile = await profiles.get(selection);
+  if (!profile || profile.health !== 'active' || await profiles.reauthenticationRequest(selection)) {
+    throw new Error('selected credential profile is unavailable');
+  }
+  const bytes = await profiles.readForStage(selection);
+  if (!bytes) throw new Error('selected credential profile is unavailable');
+  const spec = resolveAgentSpec(selection.agentId);
+  const credential = spec.credential;
+  if (!credential) throw new Error('selected credential profile is unavailable');
+  const state = await readState();
+  const providers = new Map<string, Awaited<ReturnType<typeof providerForBox>>>();
+  const provider = async (box: (typeof state.boxes)[number]) => {
+    const cached = providers.get(box.id);
+    if (cached) return cached;
+    const resolved = await providerForBox(box);
+    providers.set(box.id, resolved);
+    return resolved;
+  };
+  const result = await propagateStructuredProfileWithDeps({
+    selection,
+    sourceBoxId,
+    boxes: state.boxes,
+    credentialPath: credential.boxRelPath,
+    content: bytes.toString('utf8'),
+    defaultImage: DEFAULT_BOX_IMAGE,
+    deps: {
+      dockerVolume: (box) => agentConfigVolume(box, selection.agentId) ?? spec.dockerVolume,
+      writeDocker: async ({ volume, image, credentialPath, content, mode }) => {
+        await volumeSettingsTarget(volume, image, volume).writeText(credentialPath, content, { mode });
+      },
+      dockerRunning: async (box) => (await inspectBox(box.id)).state === 'running',
+      cloudRunning: async (box) => (await (await provider(box)).inspect(box)).state === 'running',
+      stageCloud: async (box) => {
+        const resolved = await provider(box);
+        if (!resolved.syncTransport) throw new Error('profile transport unavailable');
+        await stageCredentialProfile(profiles, resolved.syncTransport(box), selection);
+      },
+      shouldIngest: (id, sourceAgent) => Boolean(findAgentSpec(id)?.modelAuth?.sources.some(
+        (source) => source.kind === 'agent' && source.agent === sourceAgent,
+      )),
+      ingestDocker: async (box, id) => {
+        const consumer = findAgentSpec(id);
+        if (!consumer) return;
+        await runModelAuthIngest(consumer, async (argv) => {
+          const execution = await execInBox(box.container, argv);
+          return { exitCode: execution.exitCode, stdout: execution.stdout, stderr: execution.stderr };
+        }, { force: true });
+      },
+      ingestCloud: async (box, id) => {
+        const consumer = findAgentSpec(id);
+        if (!consumer) return;
+        const executionProvider = await provider(box);
+        await runModelAuthIngest(consumer, async (argv) => {
+          const execution = await executionProvider.exec(box, argv, { user: 'vscode' });
+          return { exitCode: execution.exitCode ?? 0, stdout: execution.stdout ?? '', stderr: execution.stderr ?? '' };
+        }, { force: true });
+      },
+    },
+  });
+  if (result.failed > 0) throw new Error('structured credential propagation failed');
+  process.stdout.write(`propagated ${selection.agentId} profile to ${String(result.matched)} target(s)\n`);
+}
 
 /**
  * Push one agent's backup to custody if — and only if — a control plane URL and

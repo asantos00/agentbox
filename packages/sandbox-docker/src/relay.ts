@@ -632,6 +632,8 @@ export interface RegisterBoxArgs {
   boxId: string;
   token: string;
   name: string;
+  /** Durable BoxRecord selection metadata; no credential bytes. */
+  credentialProfiles?: { agentId: string; profileId: string }[];
   /**
    * Sandbox backend. Defaults to 'docker'. 'cloud' tells the host relay to
    * spawn a `CloudBoxPoller` for this box (which requires `previewUrl` +
@@ -702,6 +704,7 @@ export async function registerBoxWithRelay(args: RegisterBoxArgs): Promise<void>
     boxId: args.boxId,
     token: args.token,
     name: args.name,
+    credentialProfiles: args.credentialProfiles,
     kind: args.kind ?? 'docker',
     backend: args.backend,
     containerName: args.containerName,
@@ -925,6 +928,7 @@ export interface BoxWithToken {
   autoApproveHostActions?: boolean;
   /** Mirrors `BoxRecord.autoApproveSafeHostActions`; re-registered on rehydrate. */
   autoApproveSafeHostActions?: boolean;
+  credentialProfiles?: { agentId: string; profileId: string }[];
 }
 
 /**
@@ -953,6 +957,7 @@ export async function rehydrateRelayRegistry(boxes: BoxWithToken[]): Promise<voi
         bridgeToken: b.bridgeToken,
         autoApproveHostActions: b.autoApproveHostActions,
         autoApproveSafeHostActions: b.autoApproveSafeHostActions,
+        credentialProfiles: b.credentialProfiles,
       });
     } catch {
       // best-effort

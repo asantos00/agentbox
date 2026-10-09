@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import { startRelayServer, type RelayServerHandle } from '../src/server.js';
+import { FsCustodyStore } from '../src/custody/fs-store.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 interface FetchResult {
   status: number;
@@ -65,6 +69,44 @@ describe('relay server', () => {
     await handle.close();
     if (prevPromptEnv === undefined) delete process.env.AGENTBOX_PROMPT;
     else process.env.AGENTBOX_PROMPT = prevPromptEnv;
+  });
+
+  it('serves profile usage only through its dedicated metadata bearer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'relay-profile-usage-'));
+    const custody = new FsCustodyStore({ root });
+    await custody.put('agents/codex/profiles/personal/auth.json', Buffer.from('fixture-credential'));
+    const isolated = await startRelayServer({
+      port: 0, host: '127.0.0.1', custody, profileUsageToken: 'usage-fixture',
+      profileUsageHelper: { inspect: async () => ({ provider: 'codex', identityMatch: true, windows: [], status: 'active', reauthRequired: false, source: 'fixture', observedAt: '2026-01-01T00:00:00.000Z', freshness: 'exact', confidence: 'exact' }) },
+    });
+    try {
+      expect((await fetchJson(isolated, 'GET', '/api/v1/credential-profiles/codex/personal/usage')).status).toBe(401);
+      const response = await fetchJson(isolated, 'GET', '/api/v1/credential-profiles/codex/personal/usage', { token: 'usage-fixture' });
+      expect(response.status).toBe(200);
+      // fetchJson intentionally returns only parsed content; exercise the raw
+      // response separately so sensitive usage metadata cannot be cached.
+      const port = (isolated.server.address() as AddressInfo).port;
+      const raw = await fetch(`http://127.0.0.1:${String(port)}/api/v1/credential-profiles/codex/personal/usage`, { headers: { Authorization: 'Bearer usage-fixture' } });
+      expect(raw.headers.get('cache-control')).toBe('no-store');
+      expect(JSON.stringify(response.body)).not.toContain('fixture-credential');
+      expect(response.body).toMatchObject({ agentId: 'codex', profileId: 'personal', identityMatch: true });
+    } finally {
+      await isolated.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('makes structured registration mappings immutable across re-registration', async () => {
+    const first = await fetchJson(handle, 'POST', '/admin/register-box', { body: { boxId: 'profile-box', token: 'fixture-token', name: 'fixture', credentialProfiles: [{ agentId: 'codex', profileId: 'personal' }] } });
+    expect(first.status).toBe(204);
+    const same = await fetchJson(handle, 'POST', '/admin/register-box', { body: { boxId: 'profile-box', token: 'fixture-token', name: 'fixture', credentialProfiles: [{ agentId: 'codex', profileId: 'personal' }] } });
+    expect(same.status).toBe(204);
+    const spoofed = await fetchJson(handle, 'POST', '/admin/register-box', { body: { boxId: 'profile-box', token: 'fixture-token', name: 'fixture', credentialProfiles: [{ agentId: 'codex', profileId: 'work' }] } });
+    expect(spoofed.status).toBe(409);
+    const omitted = await fetchJson(handle, 'POST', '/admin/register-box', { body: { boxId: 'profile-box', token: 'fixture-token', name: 'fixture' } });
+    expect(omitted.status).toBe(409);
+    const malformed = await fetchJson(handle, 'POST', '/admin/register-box', { body: { boxId: 'bad-box', token: 'fixture-token', name: 'fixture', credentialProfiles: [{ agentId: 'codex', profileId: '../bad' }] } });
+    expect(malformed.status).toBe(400);
   });
 
   it('healthz returns ok', async () => {

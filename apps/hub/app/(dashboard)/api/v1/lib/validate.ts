@@ -105,7 +105,7 @@ export function parseStartBoxAgent(
   allowedAgents: readonly string[] = AGENTS.filter((agent) => agent !== 'none'),
 ): Parsed<StartBoxAgentInput> {
   if (!isObject(body)) return { ok: false, message: 'body must be a JSON object' };
-  const { agent, prompt, args, sessionName, sessionLabel } = body;
+  const { agent, prompt, args, sessionName, sessionLabel, credentialProfiles } = body;
   if (typeof agent !== 'string' || !allowedAgents.includes(agent)) {
     return { ok: false, message: `agent must be one of ${allowedAgents.join(', ')}` };
   }
@@ -120,6 +120,17 @@ export function parseStartBoxAgent(
     (typeof sessionName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(sessionName))
   ) {
     return { ok: false, message: 'sessionName must be a valid tmux session name' };
+  }
+  if (credentialProfiles !== undefined) {
+    if (!Array.isArray(credentialProfiles)) return { ok: false, message: 'credentialProfiles must be an array' };
+    const selectedAgents = new Set<string>();
+    for (const profile of credentialProfiles) {
+      if (!isObject(profile) || typeof profile.agentId !== 'string' || typeof profile.profileId !== 'string' ||
+        !/^[a-z][a-z0-9-]{0,63}$/.test(profile.agentId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile.profileId) || selectedAgents.has(profile.agentId)) {
+        return { ok: false, message: 'credentialProfiles must select one valid profile per agent' };
+      }
+      selectedAgents.add(profile.agentId);
+    }
   }
   if (
     sessionLabel !== undefined &&
@@ -137,6 +148,7 @@ export function parseStartBoxAgent(
       ...(args === undefined ? {} : { args }),
       ...(sessionName === undefined ? {} : { sessionName }),
       ...(sessionLabel === undefined ? {} : { sessionLabel }),
+      ...(credentialProfiles === undefined ? {} : { credentialProfiles: credentialProfiles as { agentId: string; profileId: string }[] }),
     },
   };
 }

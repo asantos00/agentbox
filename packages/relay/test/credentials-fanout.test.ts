@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CredentialsFanout } from '../src/credentials-fanout.js';
+import { FsCustodyStore } from '../src/custody/fs-store.js';
+import { CredentialProfileStore } from '../src/custody/profiles.js';
 
 const claudeBlob = (expiresAt: number, refresh = 'r') =>
   JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: refresh, expiresAt } });
@@ -48,6 +50,36 @@ describe('CredentialsFanout', () => {
     await fanout.flush();
     // The two accepts within one debounce window collapse into one run.
     expect(runs).toEqual(['claude:box-b']);
+  });
+
+  it('fans a structured box update only to its exact named profile', async () => {
+    const custody = new FsCustodyStore({ root: join(dir, 'custody') });
+    const profiles = new CredentialProfileStore(custody);
+    await profiles.update({ agentId: 'codex', profileId: 'personal' }, Buffer.from('{"fixture":"old"}'));
+    await profiles.update({ agentId: 'codex', profileId: 'work' }, Buffer.from('{"fixture":"work"}'));
+    const profileRun = vi.fn().mockResolvedValue(undefined);
+    const legacyRun = vi.fn().mockResolvedValue(undefined);
+    const fanout = new CredentialsFanout({ log: () => {}, debounceMs: 10, runPropagate: legacyRun,
+      custody, profileForBox: () => ({ agentId: 'codex', profileId: 'personal' }), runProfilePropagate: profileRun });
+    await expect(fanout.handle('box-a', payload('codex', '{"fixture":"new"}'))).resolves.toMatchObject({ accepted: true });
+    await vi.advanceTimersByTimeAsync(20); await fanout.flush();
+    expect((await profiles.readForStage({ agentId: 'codex', profileId: 'personal' }))?.toString()).toContain('new');
+    expect((await profiles.readForStage({ agentId: 'codex', profileId: 'work' }))?.toString()).toContain('work');
+    expect(profileRun).toHaveBeenCalledWith({ agentId: 'codex', profileId: 'personal' }, 'box-a');
+    expect(legacyRun).not.toHaveBeenCalled();
+  });
+
+  it('treats a registered structured default as profile-scoped, never legacy', async () => {
+    const custody = new FsCustodyStore({ root: join(dir, 'default-custody') });
+    const profiles = new CredentialProfileStore(custody);
+    await profiles.update({ agentId: 'codex', profileId: 'default' }, Buffer.from('{"fixture":"old"}'));
+    const legacy = vi.fn().mockResolvedValue(undefined); const scoped = vi.fn().mockResolvedValue(undefined);
+    const fanout = new CredentialsFanout({ log: () => {}, debounceMs: 10, runPropagate: legacy, custody,
+      profileForBox: () => ({ agentId: 'codex', profileId: 'default' }), runProfilePropagate: scoped });
+    await fanout.handle('box-default', payload('codex', '{"fixture":"new"}'));
+    await vi.advanceTimersByTimeAsync(20); await fanout.flush();
+    expect(scoped).toHaveBeenCalledWith({ agentId: 'codex', profileId: 'default' }, 'box-default');
+    expect(legacy).not.toHaveBeenCalled();
   });
 
   it('rejects malformed payloads without touching the backup', async () => {

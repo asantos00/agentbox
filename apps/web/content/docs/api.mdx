@@ -98,6 +98,7 @@ the interactive reference at `GET /docs`.
 | `GET /health`       | Liveness + API version (no auth).    |
 | `GET /openapi.json` | The OpenAPI 3.1 spec (no auth).      |
 | `GET /docs`         | Interactive API reference (no auth). |
+| `GET /credential-profiles/{agentId}/{profileId}/usage` | Control-host metadata-only usage observation. Requires the dedicated `AGENTBOX_PROFILE_USAGE_TOKEN` bearer, never the custody admin bearer. Returns normalized identity-match, usage, freshness, and bounded status metadata only; it accepts no paths, commands, environment, or credential values. |
 
 ### Boxes
 

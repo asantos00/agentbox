@@ -261,6 +261,8 @@ export interface StartDetachedCloudAgentArgs {
   onProgress?: (line: string) => void;
   /** Reports whether this start installed/repaired the requested agent. */
   onInstalled?: (installed: boolean) => void;
+  /** AgentBox-owned selected-profile stage, after install and before ingest/tmux. */
+  stageCredentialProfiles?: (transport: SyncTransport) => Promise<void>;
 }
 
 /**
@@ -369,10 +371,13 @@ export async function startDetachedCloudAgent(
   // paused sandbox fails, and an install failure must short-circuit before any
   // config/credential staging or tmux launch.
   await seedDeclaredFilesForLaunch(provider, box, binary);
+  if (args.stageCredentialProfiles) {
+    await args.stageCredentialProfiles(provider.syncTransport?.(box) ?? execOnlyTransport(provider, box));
+  }
   // Same seam, same reason as the docker path: after the binary exists, before
   // the session starts. Hash-gated, so a warm start is a no-op unless the
   // credential fan-out has pushed a refreshed login since the last one.
-  if ((box.borrowedCredentials ?? []).length > 0 && isRuntimeAgent(binary)) {
+  if (((box.borrowedCredentials ?? []).length > 0 || args.stageCredentialProfiles) && isRuntimeAgent(binary)) {
     await runModelAuthIngest(
       resolveAgentSpec(binary),
       async (argv) => {
