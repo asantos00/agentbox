@@ -318,6 +318,45 @@ export function buildOpenApi(): Record<string, unknown> {
           },
         },
       },
+      '/boxes/{id}/agents/start': {
+        post: {
+          tags: ['Boxes'],
+          summary: 'Install and start an agent in an existing box',
+          description:
+            'Ensures the requested TUI agent and configured exact version are installed, seeds the current default static/credential state, then starts its deterministic tmux session. Named credential profiles and task packages are not part of this operation yet. Accepts Idempotency-Key for durable replay/conflict handling.',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+            { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 200 } },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    agent: { type: 'string' },
+                    prompt: { type: 'string' },
+                    args: { type: 'array', items: { type: 'string' } },
+                    sessionName: { type: 'string' },
+                    sessionLabel: { type: 'string', maxLength: 120 },
+                  },
+                  required: ['agent'],
+                },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Agent session started or replayed' },
+            '400': errorResponse,
+            '401': errorResponse,
+            '404': errorResponse,
+            '409': errorResponse,
+            '503': errorResponse,
+          },
+        },
+      },
       '/boxes/{id}/git': {
         get: {
           tags: ['Box git'],

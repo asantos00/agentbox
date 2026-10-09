@@ -1,7 +1,7 @@
 import { loadEffectiveConfig } from '@agentbox/config';
 import type { AgentActivityState } from '@agentbox/ctl';
 import type { PromptAskEvent } from '@agentbox/relay';
-import { herdrSend } from './herdr-socket.js';
+import { herdrRequest, herdrSend } from './herdr-socket.js';
 import type { AgentMode } from '@agentbox/core';
 
 /**
@@ -27,6 +27,8 @@ export type HerdrAgentMode = AgentMode;
 /** Herdr's semantic agent states (https://herdr.dev/docs/socket-api). */
 type HerdrSemanticState = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
+export type HerdrNamingState = 'pending' | 'confirmed' | 'degraded';
+
 interface HerdrAgentView {
   state: HerdrSemanticState;
   /** Short human label shown alongside the agent. */
@@ -39,6 +41,92 @@ const AGENT_LABEL: Record<Exclude<HerdrAgentMode, 'shell'>, string> = {
   opencode: 'opencode',
   pi: 'pi',
 };
+
+const namingState = new Map<string, HerdrNamingState>();
+
+/** Herdr custom names must match `[a-z][a-z0-9_-]{0,31}`. */
+export function normalizeHerdrAgentName(label: string): string {
+  let normalized = label
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[^a-z]+/, '')
+    .replace(/[-_]+$/g, '')
+    .slice(0, 32);
+  if (!normalized) normalized = 'agentbox';
+  if (!/^[a-z]/.test(normalized)) normalized = `a-${normalized}`.slice(0, 32);
+  return normalized;
+}
+
+function listedAgents(result: Record<string, unknown> | null): Record<string, unknown>[] {
+  if (!result) return [];
+  const value = Array.isArray(result['agents'])
+    ? result['agents']
+    : Array.isArray(result)
+      ? result
+      : [];
+  return value.filter((entry): entry is Record<string, unknown> =>
+    Boolean(entry && typeof entry === 'object'),
+  );
+}
+
+function listConfirmsName(
+  result: Record<string, unknown> | null,
+  paneId: string,
+  expected: string,
+): boolean {
+  return listedAgents(result).some((agent) => {
+    const pane = agent['pane_id'] ?? agent['paneId'];
+    const name = agent['name'] ?? agent['agent_name'];
+    return pane === paneId && name === expected;
+  });
+}
+
+/** Rename and confirm through `agent.list`; a successful rename reply alone is not acknowledgement. */
+export async function ensureHerdrAgentName(
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+  request: typeof herdrRequest = herdrRequest,
+): Promise<HerdrNamingState> {
+  const paneId = env['HERDR_PANE_ID'];
+  if (!paneId || !herdrSocketPathPresent(env)) return 'degraded';
+  const expected = normalizeHerdrAgentName(label);
+  const key = `${env['HERDR_SOCKET_PATH'] ?? ''}:${paneId}:${expected}`;
+  if (namingState.get(key) === 'confirmed') return 'confirmed';
+  namingState.set(key, 'pending');
+
+  const before = await request('agent.list', {}, env);
+  if (listConfirmsName(before, paneId, expected)) {
+    namingState.set(key, 'confirmed');
+    return 'confirmed';
+  }
+  const renamed = await request('agent.rename', { target: paneId, name: expected }, env);
+  if (!renamed) {
+    namingState.set(key, 'degraded');
+    return 'degraded';
+  }
+  const after = await request('agent.list', {}, env);
+  const state = listConfirmsName(after, paneId, expected) ? 'confirmed' : 'degraded';
+  namingState.set(key, state);
+  return state;
+}
+
+function herdrSocketPathPresent(env: NodeJS.ProcessEnv): boolean {
+  return typeof env['HERDR_SOCKET_PATH'] === 'string' && env['HERDR_SOCKET_PATH']!.length > 0;
+}
+
+export function herdrAgentNamingState(
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): HerdrNamingState {
+  const paneId = env['HERDR_PANE_ID'];
+  if (!paneId) return 'degraded';
+  return (
+    namingState.get(
+      `${env['HERDR_SOCKET_PATH'] ?? ''}:${paneId}:${normalizeHerdrAgentName(label)}`,
+    ) ?? 'pending'
+  );
+}
 
 /**
  * Map our coarse activity union onto a Herdr agent state. `null` means "leave
@@ -117,18 +205,24 @@ function sendAgentState(
 ): void {
   const pane = env['HERDR_PANE_ID'];
   if (!pane) return;
-  herdrSend(
-    'pane.report_agent',
-    {
-      pane_id: pane,
-      source: `agentbox:${mode}`,
-      agent: mode,
-      state,
-      message,
-      custom_status: boxName,
-    },
-    env,
-  );
+  // A pane-title fallback is not a qualified AgentBox name. Do not report the
+  // agent as normally visible until Herdr has acknowledged the custom name in
+  // `agent.list`; failures remain degraded and the next report/reconnect retries.
+  void ensureHerdrAgentName(boxName, env).then((naming) => {
+    if (naming !== 'confirmed') return;
+    herdrSend(
+      'pane.report_agent',
+      {
+        pane_id: pane,
+        source: `agentbox:${mode}`,
+        agent: mode,
+        state,
+        message,
+        custom_status: normalizeHerdrAgentName(boxName),
+      },
+      env,
+    );
+  });
 }
 
 /** Report the box agent's activity on this Herdr pane. */

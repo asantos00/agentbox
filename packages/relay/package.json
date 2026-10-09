@@ -20,7 +20,11 @@
       "types": "./dist/daemon.d.ts",
       "import": "./dist/daemon.js"
     },
-    "./bin": "./dist/bin.cjs"
+    "./bin": "./dist/bin.cjs",
+    "./operation-journal": {
+      "types": "./dist/operation-journal.d.ts",
+      "import": "./dist/operation-journal.js"
+    }
   },
   "bin": {
     "agentbox-relay": "./dist/bin.cjs"

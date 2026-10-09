@@ -41,6 +41,7 @@ export default defineConfig([
       index: 'src/index.ts',
       'control-plane': 'src/control-plane.ts',
       daemon: 'src/daemon.ts',
+      'operation-journal': 'src/operation-journal.ts',
     },
     format: ['esm'],
     target: 'node20',

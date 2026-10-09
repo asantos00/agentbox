@@ -20,6 +20,8 @@ interface FakeOpts {
   onBuildAttach?: (opts: unknown) => void;
   /** argv runDetached spawns, per attempt (1-indexed); defaults to `true`. */
   argvForAttempt?: (attempt: number) => string[];
+  installExec?: (argv: string[]) => ExecResult;
+  docker?: boolean;
 }
 
 function fakeProvider(opts: FakeOpts = {}): {
@@ -30,7 +32,7 @@ function fakeProvider(opts: FakeOpts = {}): {
   let starts = 0;
   let attempts = 0;
   const provider = {
-    name: 'e2b',
+    name: opts.docker ? 'docker' : 'e2b',
     probeState: () => Promise.resolve(opts.state ?? 'running'),
     start: (box: BoxRecord) => {
       starts++;
@@ -39,26 +41,36 @@ function fakeProvider(opts: FakeOpts = {}): {
     },
     // The launch path seeds the agent's declared files through this.
     syncTransport: () => ({
-      exec: () => {
-        opts.onEvent?.('seed');
-        return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+      exec: (argv: string[]) => {
+        if (argv.join(' ').includes('command -v')) opts.onEvent?.('install-check');
+        else opts.onEvent?.('seed');
+        return Promise.resolve(opts.installExec?.(argv) ?? { exitCode: 0, stdout: '', stderr: '' });
       },
       pushFile: () => Promise.resolve(),
     }),
     // `true` is a real no-op binary, so runDetached spawns it → exit 0 without
     // touching a sandbox. The verify step below drives the mocked exec.
-    buildAttach: (_box: BoxRecord, _kind: string, o: unknown) => {
-      opts.onBuildAttach?.(o);
-      opts.onEvent?.('launch');
-      attempts++;
-      return Promise.resolve({ argv: opts.argvForAttempt?.(attempts) ?? ['true'], env: undefined });
-    },
-    exec: (_box: BoxRecord, argv: string[]) =>
-      Promise.resolve(
+    ...(opts.docker
+      ? {}
+      : {
+          buildAttach: (_box: BoxRecord, _kind: string, o: unknown) => {
+            opts.onBuildAttach?.(o);
+            opts.onEvent?.('launch');
+            attempts++;
+            return Promise.resolve({
+              argv: opts.argvForAttempt?.(attempts) ?? ['true'],
+              env: undefined,
+            });
+          },
+        }),
+    exec: (_box: BoxRecord, argv: string[]) => {
+      if (opts.docker && argv[0] === 'tmux' && argv[1] === 'new-session') opts.onEvent?.('launch');
+      return Promise.resolve(
         opts.exec?.(argv) ??
           // No session yet unless a test says otherwise; the verify probe is healthy.
           (isSessionExistsProbe(argv) ? { exitCode: 1, stdout: '', stderr: '' } : HEALTHY),
-      ),
+      );
+    },
   } as unknown as Provider;
   return { provider, started: () => starts, attempts: () => attempts };
 }
@@ -240,7 +252,45 @@ describe('startDetachedCloudAgent — declared-file seeding', () => {
       extraArgs: ['x'],
       verify: { windowMs: 0 },
     });
-    expect(order.slice(0, 3)).toEqual(['start', 'seed', 'launch']);
+    expect(order.slice(0, 4)).toEqual(['start', 'install-check', 'seed', 'launch']);
+  });
+
+  it('short-circuits before seeding or launch when installation fails', async () => {
+    const order: string[] = [];
+    const { provider } = fakeProvider({
+      onEvent: (event) => order.push(event),
+      installExec: (argv) =>
+        argv.join(' ').includes('command -v')
+          ? { exitCode: 1, stdout: '', stderr: 'missing' }
+          : { exitCode: 1, stdout: '', stderr: 'npm failed' },
+    });
+    await expect(
+      startDetachedCloudAgent({
+        provider,
+        box,
+        binary: 'pi',
+        sessionName: 'pi',
+        extraArgs: ['x'],
+        verify: { windowMs: 0 },
+      }),
+    ).rejects.toThrow(/installing it failed/);
+    expect(order).not.toContain('launch');
+  });
+
+  it('uses the same install-before-seed-before-launch order on docker', async () => {
+    const order: string[] = [];
+    const { provider } = fakeProvider({ docker: true, onEvent: (event) => order.push(event) });
+    await startDetachedCloudAgent({
+      provider,
+      box,
+      binary: 'pi',
+      sessionName: 'pi',
+      extraArgs: ['x'],
+      verify: { windowMs: 0 },
+    });
+    expect(order[0]).toBe('install-check');
+    expect(order.indexOf('seed')).toBeGreaterThan(order.indexOf('install-check'));
+    expect(order.indexOf('launch')).toBeGreaterThan(order.indexOf('seed'));
   });
 
   it('seeds a box that was already running too', async () => {

@@ -5,6 +5,7 @@ import { resolveBoxRefView } from '@/lib/boxes/resolve';
 import { backendOrNull, readState } from '../lib/backend';
 import { timelineMeta } from '../lib/actor';
 import { fail, failFromAction, ok } from '../lib/envelope';
+import { journaledApiMutation } from '../lib/idempotency';
 import { AGENTS, parseCreateBox, readJson } from '../lib/validate';
 
 export const runtime = 'nodejs';
@@ -49,7 +50,37 @@ export async function POST(req: Request): Promise<Response> {
   const parsed = parseCreateBox(parsedBody.value, allowedAgents);
   if (!parsed.ok) return fail('invalid_request', parsed.message, parsed.details);
 
-  const res = await backend.create(parsed.value, await timelineMeta(req, backend));
+  const meta = await timelineMeta(req, backend);
+  const mutation = await journaledApiMutation({
+    req,
+    kind: 'box.create',
+    request: parsed.value,
+    reconcile: async (tag) => {
+      const name = parsed.value.name?.trim() || tag;
+      const job = (await backend.listJobs()).find(
+        (candidate) =>
+          candidate.name === name && candidate.provider === (parsed.value.provider ?? 'docker'),
+      );
+      return job
+        ? { state: 'completed', result: { ok: true as const, jobId: job.id } }
+        : { state: 'absent' };
+    },
+    effect: (tag) =>
+      backend.create(
+        parsed.value.name?.trim() || !tag ? parsed.value : { ...parsed.value, name: tag },
+        meta,
+      ),
+  });
+  if (!mutation.ok) return mutation.response;
+  const res = mutation.value;
+  if (!res) return fail('internal', 'create operation returned no result');
   if (!res.ok) return failFromAction(res.error);
-  return ok({ jobId: res.jobId }, 202);
+  return ok(
+    {
+      jobId: res.jobId,
+      replayed: mutation.replayed,
+      ...(mutation.operationTag ? { operationTag: mutation.operationTag } : {}),
+    },
+    202,
+  );
 }

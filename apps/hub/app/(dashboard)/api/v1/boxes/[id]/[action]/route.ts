@@ -5,6 +5,7 @@
 import { backendOrNull } from '../../../lib/backend';
 import { timelineMeta } from '../../../lib/actor';
 import { fail, failFromAction, ok } from '../../../lib/envelope';
+import { journaledApiMutation } from '../../../lib/idempotency';
 import { isLifecycleAction, LIFECYCLE_ACTIONS, readJson } from '../../../lib/validate';
 
 export const runtime = 'nodejs';
@@ -43,12 +44,45 @@ export async function POST(
       typeof parsed.value === 'object' &&
       parsed.value !== null &&
       (parsed.value as { keepSnapshot?: unknown }).keepSnapshot === true;
-    const res = await backend.destroy(id, { keepSnapshot }, meta);
-    if (!res.ok) return failFromAction(res.error);
-    return ok({ ok: true });
+    const mutation = await journaledApiMutation({
+      req,
+      kind: 'box.lifecycle',
+      request: { boxId: id, action, keepSnapshot },
+      reconcile: async () => {
+        const exists = (await backend.getData()).boxes.some((box) => box.id === id);
+        return exists ? { state: 'absent' } : { state: 'completed', result: { ok: true as const } };
+      },
+      effect: () => backend.destroy(id, { keepSnapshot }, meta),
+    });
+    if (!mutation.ok) return mutation.response;
+    if (!mutation.value) return fail('internal', 'lifecycle operation returned no result');
+    if (!mutation.value.ok) return failFromAction(mutation.value.error);
+    return ok({ ok: true, replayed: mutation.replayed });
   }
 
-  const res = await backend[action](id, meta);
-  if (!res.ok) return failFromAction(res.error);
-  return ok({ ok: true });
+  const mutation = await journaledApiMutation({
+    req,
+    kind: 'box.lifecycle',
+    request: { boxId: id, action },
+    reconcile: async () => {
+      if (action === 'screen') {
+        return {
+          state: 'unreconcilable',
+          reason: 'screen has no provider-visible committed state',
+        };
+      }
+      const box = (await backend.getData()).boxes.find((candidate) => candidate.id === id);
+      if (!box)
+        return { state: 'unreconcilable', reason: `box ${id} disappeared during ${action}` };
+      const target = action === 'pause' ? 'paused' : action === 'stop' ? 'stopped' : 'running';
+      return box.state === target
+        ? { state: 'completed', result: { ok: true as const } }
+        : { state: 'absent' };
+    },
+    effect: () => backend[action](id, meta),
+  });
+  if (!mutation.ok) return mutation.response;
+  if (!mutation.value) return fail('internal', 'lifecycle operation returned no result');
+  if (!mutation.value.ok) return failFromAction(mutation.value.error);
+  return ok({ ok: true, replayed: mutation.replayed });
 }

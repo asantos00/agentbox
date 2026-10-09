@@ -250,8 +250,50 @@ describe('agent settings reach the install shell as env', () => {
     expect(root?.[2]).not.toContain('AGENTBOX_AGENT_SETTING_');
   });
 
+  it('keeps an exact matching Pi version on the warm one-install path', async () => {
+    const t = makeRecordingTransport({
+      execResult: (cmd) =>
+        cmd.join(' ').includes('--version')
+          ? { exitCode: 0, stdout: 'pi 0.85.1\n', stderr: '' }
+          : ok,
+    });
+    await expect(
+      ensureAgentInstalled(t, 'pi', { settings: { version: '0.85.1', modelAuth: 'none' } }),
+    ).resolves.toEqual({ installed: false });
+    expect(execs(t)).toHaveLength(2);
+  });
+
+  it('repairs a wrong exact Pi version before launch', async () => {
+    let versionProbe = 0;
+    const t = makeRecordingTransport({
+      execResult: (cmd) => {
+        if (!cmd.join(' ').includes('--version')) return ok;
+        versionProbe++;
+        return {
+          exitCode: 0,
+          stdout: versionProbe === 1 ? 'pi 0.84.0\n' : 'pi 0.85.1\n',
+          stderr: '',
+        };
+      },
+    });
+    await expect(
+      ensureAgentInstalled(t, 'pi', { settings: { version: '0.85.1', modelAuth: 'none' } }),
+    ).resolves.toEqual({ installed: true });
+    expect(
+      execs(t)
+        .map((cmd) => cmd.join(' '))
+        .some((cmd) => cmd.includes('@earendil-works/pi-coding-agent@')),
+    ).toBe(true);
+  });
+
   it('installs the configured Pi version rather than an implicit latest', async () => {
-    const t = makeRecordingTransport({ execResult: missingThenOk() });
+    const base = missingThenOk();
+    const t = makeRecordingTransport({
+      execResult: (cmd, opts) =>
+        cmd.join(' ').includes('--version')
+          ? { exitCode: 0, stdout: 'pi 0.85.1\n', stderr: '' }
+          : base(cmd, opts),
+    });
     await ensureAgentInstalled(t, 'pi', { settings: { version: '0.85.1', modelAuth: 'none' } });
     const install = execs(t)
       .map((c) => c.join(' '))

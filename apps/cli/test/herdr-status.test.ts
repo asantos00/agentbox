@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { herdrStatusActive, mapActivityToAgentState } from '../src/terminal/herdr-status.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  ensureHerdrAgentName,
+  herdrAgentNamingState,
+  herdrStatusActive,
+  mapActivityToAgentState,
+  normalizeHerdrAgentName,
+} from '../src/terminal/herdr-status.js';
 
 describe('mapActivityToAgentState', () => {
   it('maps working/compacting to a working state', () => {
@@ -44,6 +50,49 @@ describe('mapActivityToAgentState', () => {
     expect(mapActivityToAgentState('claude', 'unknown')).toBeNull();
     expect(mapActivityToAgentState('claude', undefined)).toBeNull();
     expect(mapActivityToAgentState('shell', 'working')).toBeNull();
+  });
+});
+
+describe('acknowledged Herdr naming', () => {
+  const env = {
+    HERDR_ENV: '1',
+    HERDR_SOCKET_PATH: '/tmp/herdr-naming.sock',
+    HERDR_PANE_ID: 'w1:p9',
+  };
+
+  it('normalizes labels to Herdr grammar and length', () => {
+    expect(normalizeHerdrAgentName('  Personal API / Worker #1  ')).toBe('personal-api-worker-1');
+    expect(normalizeHerdrAgentName('99 Problems')).toBe('problems');
+    expect(normalizeHerdrAgentName('---')).toBe('agentbox');
+    expect(normalizeHerdrAgentName(`A${'x'.repeat(80)}`)).toHaveLength(32);
+  });
+
+  it('renames a stale agent and confirms through agent.list', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ agents: [{ pane_id: 'w1:p9', name: 'stale' }] })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ agents: [{ pane_id: 'w1:p9', name: 'personal-worker' }] });
+    await expect(ensureHerdrAgentName('Personal Worker', env, request)).resolves.toBe('confirmed');
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      'agent.rename',
+      { target: 'w1:p9', name: 'personal-worker' },
+      env,
+    );
+  });
+
+  it('stays degraded after rename failure and retries after reconnect/report', async () => {
+    const failed = vi.fn().mockResolvedValueOnce({ agents: [] }).mockResolvedValueOnce(null);
+    await expect(ensureHerdrAgentName('Reconnect Worker', env, failed)).resolves.toBe('degraded');
+    expect(herdrAgentNamingState('Reconnect Worker', env)).toBe('degraded');
+
+    const retried = vi
+      .fn()
+      .mockResolvedValueOnce({ agents: [] })
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ agents: [{ pane_id: 'w1:p9', name: 'reconnect-worker' }] });
+    await expect(ensureHerdrAgentName('Reconnect Worker', env, retried)).resolves.toBe('confirmed');
   });
 });
 

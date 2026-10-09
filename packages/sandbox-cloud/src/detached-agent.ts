@@ -12,10 +12,11 @@
  * that resolves the provider from the box + handles the resume-fallback.
  */
 import { spawn } from 'node:child_process';
-import type { AgentSettings, BoxRecord, Provider } from '@agentbox/core';
+import type { AgentSettings, BoxRecord, Provider, SyncTransport } from '@agentbox/core';
 import { agentSettingsFor } from '@agentbox/config';
 import {
   agentTuiEnv,
+  ensureAgentInstalled,
   isRuntimeAgent,
   resolveAgentSpec,
   runModelAuthIngest,
@@ -119,7 +120,15 @@ export async function startDetachedSession(
   command: string,
 ): Promise<{ exitCode: number; stderr: string }> {
   if (!provider.buildAttach) {
-    throw new Error(`provider '${provider.name}' does not support detached sessions`);
+    // Docker has no attach-spec builder: its provider exec is already the
+    // transport boundary. Keep it on the same detached launcher as clouds so
+    // REST starts have one install -> seed -> launch ordering on every backend.
+    const r = await provider.exec(
+      box,
+      ['tmux', 'new-session', '-d', '-s', sessionName, '-c', '/workspace', command],
+      { user: 'vscode', cwd: '/workspace' },
+    );
+    return { exitCode: r.exitCode, stderr: r.stderr };
   }
   const spec = await provider.buildAttach(box, 'agent', {
     sessionName,
@@ -248,6 +257,10 @@ export interface StartDetachedCloudAgentArgs {
   verify?: { windowMs?: number; pollMs?: number };
   /** Retry tuning for the session pre-start itself (test hook). */
   startRetry?: { attempts?: number; backoffMs?: number };
+  /** Progress from installation (used by hub job/API diagnostics). */
+  onProgress?: (line: string) => void;
+  /** Reports whether this start installed/repaired the requested agent. */
+  onInstalled?: (installed: boolean) => void;
 }
 
 /**
@@ -309,6 +322,22 @@ async function resolveBoxAgentSettings(box: BoxRecord, agent: string): Promise<A
   return agentSettingsFor(agent, box.workspacePath);
 }
 
+function execOnlyTransport(provider: Provider, box: BoxRecord): SyncTransport {
+  return {
+    caps: { persistentVolumes: false, helperContainer: false, ephemeralFs: true },
+    exec: async (argv, opts) => {
+      const r = await provider.exec(box, argv, opts);
+      return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+    },
+    applyTarball: () => Promise.reject(new Error(`provider '${provider.name}' cannot stage files`)),
+    pushTree: () => Promise.reject(new Error(`provider '${provider.name}' cannot stage files`)),
+    pushFile: () => Promise.reject(new Error(`provider '${provider.name}' cannot stage files`)),
+    pullTree: () => Promise.reject(new Error(`provider '${provider.name}' cannot read files`)),
+    pullFile: () => Promise.reject(new Error(`provider '${provider.name}' cannot read files`)),
+    readText: () => Promise.resolve(null),
+  };
+}
+
 export async function startDetachedCloudAgent(
   args: StartDetachedCloudAgentArgs,
 ): Promise<BoxRecord> {
@@ -321,10 +350,24 @@ export async function startDetachedCloudAgent(
   if (state !== 'running') {
     box = await provider.start(box);
   }
-  // AFTER the box is running: a seed exec against a paused sandbox fails, and
-  // best-effort means that failure is silent. Seeded here rather than at the
-  // callers so every consumer of this primitive — the CLI's detached start and
-  // the control box's create worker — gets it in the right order.
+  // Installation is the first in-box effect. Existing-box starts used to seed
+  // and launch directly, so an agentless box produced only tmux's later "no
+  // server running" symptom. `ensureAgentInstalled` also enforces Pi's exact
+  // configured version while retaining a one-probe warm path.
+  if (isRuntimeAgent(binary)) {
+    const transport = provider.syncTransport?.(box) ?? execOnlyTransport(provider, box);
+    const installed = await ensureAgentInstalled(transport, binary, {
+      settings: await resolveBoxAgentSettings(box, binary),
+      ...(args.onProgress ? { onProgress: args.onProgress } : {}),
+    });
+    args.onInstalled?.(installed.installed);
+  } else {
+    args.onInstalled?.(false);
+  }
+
+  // AFTER the box is running and installation succeeded: a seed exec against a
+  // paused sandbox fails, and an install failure must short-circuit before any
+  // config/credential staging or tmux launch.
   await seedDeclaredFilesForLaunch(provider, box, binary);
   // Same seam, same reason as the docker path: after the binary exists, before
   // the session starts. Hash-gated, so a warm start is a no-op unless the

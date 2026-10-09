@@ -173,6 +173,24 @@ export interface HubApiCreateBoxOpts extends CreateJobRequestOpts {
 }
 
 /** Body for `POST /api/v1/boxes` — mirrors the hub's `CreateBoxInput`. */
+export interface HubApiStartAgentInput {
+  agent: AgentId;
+  prompt?: string;
+  args?: string[];
+  sessionName?: string;
+  sessionLabel?: string;
+}
+
+export interface HubApiStartAgentResult {
+  ok: true;
+  agent: AgentId;
+  sessionName: string;
+  sessionLabel: string;
+  installed: boolean;
+  replayed: boolean;
+  operationTag?: string;
+}
+
 export interface HubApiCreateBoxInput {
   /** Exactly one of projectId / repoUrl. */
   projectId?: string;
@@ -769,7 +787,7 @@ export class HubApiClient {
     method: string,
     path: string,
     body?: unknown,
-    opts: { timeoutMs?: number } = {},
+    opts: { timeoutMs?: number; idempotencyKey?: string } = {},
   ): Promise<T> {
     const session = await this.sessionHeader();
     // Only with a session: a turn on its own names nobody.
@@ -780,6 +798,7 @@ export class HubApiClient {
         Authorization: `Bearer ${this.token}`,
         ...(session ? { 'X-AgentBox-Session': session } : {}),
         ...(turn ? { 'X-AgentBox-Session-Turn': turn } : {}),
+        ...(opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -875,8 +894,17 @@ export class HubApiClient {
   }
 
   /** Lifecycle action on a box. Reverse-adoption lets the hub drive registered-only boxes. */
-  async lifecycle(id: string, action: HubLifecycleAction): Promise<void> {
-    await this.request<{ ok: true }>('POST', `/boxes/${encodeURIComponent(id)}/${action}`);
+  async lifecycle(
+    id: string,
+    action: HubLifecycleAction,
+    opts: { idempotencyKey?: string } = {},
+  ): Promise<void> {
+    await this.request<{ ok: true }>(
+      'POST',
+      `/boxes/${encodeURIComponent(id)}/${action}`,
+      undefined,
+      opts,
+    );
   }
 
   /**
@@ -899,8 +927,25 @@ export class HubApiClient {
    * control-plane clone queue. Returns the background job id; progress streams
    * over {@link streamJobLog} and the verdict comes from {@link getJob}.
    */
-  async createBox(body: HubApiCreateBoxInput): Promise<{ jobId: string }> {
-    return this.request<{ jobId: string }>('POST', '/boxes', body);
+  async createBox(
+    body: HubApiCreateBoxInput,
+    opts: { idempotencyKey?: string } = {},
+  ): Promise<{ jobId: string }> {
+    return this.request<{ jobId: string }>('POST', '/boxes', body, opts);
+  }
+
+  /** Install/repair and launch an agent in an existing agentless box. */
+  startAgent(
+    id: string,
+    body: HubApiStartAgentInput,
+    opts: { idempotencyKey?: string } = {},
+  ): Promise<HubApiStartAgentResult> {
+    return this.request<HubApiStartAgentResult>(
+      'POST',
+      `/boxes/${encodeURIComponent(id)}/agents/start`,
+      body,
+      opts,
+    );
   }
 
   /** Create-job status (poll until done/failed). */

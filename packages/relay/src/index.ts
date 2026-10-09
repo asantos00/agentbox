@@ -173,6 +173,19 @@ export { HubNotifier } from './hub-notifier.js';
 export { BoxNotices } from './notices.js';
 export { hashRpcParams, HostInitiatedTokens } from './host-initiated.js';
 export {
+  DEFAULT_OPERATION_JOURNAL_DIR,
+  FsOperationJournal,
+  OperationBlockedError,
+  OperationConflictError,
+  operationRequestHash,
+  operationTag,
+  runJournaledOperation,
+  type OperationJournalEntry,
+  type OperationKind,
+  type OperationStatus,
+  type ReconcileResult,
+} from './operation-journal.js';
+export {
   appJwt,
   GitHubAppLeaser,
   loadGitHubAppConfig,

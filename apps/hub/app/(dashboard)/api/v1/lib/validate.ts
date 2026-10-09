@@ -6,6 +6,7 @@ import type {
   CreateBoxInput,
   CreateBoxOpts,
   RestoreProjectInput,
+  StartBoxAgentInput,
 } from '@/lib/boxes/backend-types';
 import type { ManagerBoxTarget, TimelineEventInput } from '@agentbox/relay';
 
@@ -97,6 +98,47 @@ function parseProviderOptions(
     out[key] = v;
   }
   return { ok: true, value: Object.keys(out).length > 0 ? out : undefined };
+}
+
+export function parseStartBoxAgent(
+  body: unknown,
+  allowedAgents: readonly string[] = AGENTS.filter((agent) => agent !== 'none'),
+): Parsed<StartBoxAgentInput> {
+  if (!isObject(body)) return { ok: false, message: 'body must be a JSON object' };
+  const { agent, prompt, args, sessionName, sessionLabel } = body;
+  if (typeof agent !== 'string' || !allowedAgents.includes(agent)) {
+    return { ok: false, message: `agent must be one of ${allowedAgents.join(', ')}` };
+  }
+  if (prompt !== undefined && typeof prompt !== 'string') {
+    return { ok: false, message: 'prompt must be a string' };
+  }
+  if (args !== undefined && (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string'))) {
+    return { ok: false, message: 'args must be an array of strings' };
+  }
+  if (
+    sessionName !== undefined &&
+    (typeof sessionName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(sessionName))
+  ) {
+    return { ok: false, message: 'sessionName must be a valid tmux session name' };
+  }
+  if (
+    sessionLabel !== undefined &&
+    (typeof sessionLabel !== 'string' ||
+      sessionLabel.trim().length === 0 ||
+      sessionLabel.length > 120)
+  ) {
+    return { ok: false, message: 'sessionLabel must be a non-empty string up to 120 characters' };
+  }
+  return {
+    ok: true,
+    value: {
+      agent,
+      ...(prompt === undefined ? {} : { prompt }),
+      ...(args === undefined ? {} : { args }),
+      ...(sessionName === undefined ? {} : { sessionName }),
+      ...(sessionLabel === undefined ? {} : { sessionLabel }),
+    },
+  };
 }
 
 export function parseCreateBox(

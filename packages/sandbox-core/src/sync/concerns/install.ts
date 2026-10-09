@@ -194,10 +194,33 @@ export async function ensureAgentInstalled(
   opts: { onProgress?: (line: string) => void; settings?: AgentSettings } = {},
 ): Promise<EnsureAgentInstalledResult> {
   const spec = resolveAgentSpec(agent);
+  const settings = opts.settings ?? (await resolveConfiguredSettings(spec.id));
   const probe = await transport.exec(['sh', '-c', `command -v ${spec.binary}`]);
-  if (probe.exitCode === 0) return { installed: false };
+  let installReason = 'absent from this box image';
 
-  opts.onProgress?.(`installing ${spec.id} (absent from this box image)`);
+  // Pi is version-pinned by its portable `pi.version` setting. An exact version
+  // must be checked even when a `pi` binary is already on PATH: otherwise a
+  // long-lived agentless box silently keeps whichever release was installed by
+  // its first task. Dist-tags (notably the default `latest`) cannot be compared
+  // without a registry lookup, so they retain the warm one-probe path.
+  if (probe.exitCode === 0 && spec.id === 'pi') {
+    const expected = settings?.['version'];
+    if (typeof expected === 'string' && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(expected)) {
+      const version = await transport.exec(['sh', '-lc', `${spec.binary} --version`]);
+      const installed =
+        version.exitCode === 0
+          ? version.stdout.trim().match(/\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/)?.[0]
+          : undefined;
+      if (installed === expected) return { installed: false };
+      installReason = `installed version ${installed ?? 'unknown'} does not match ${expected}`;
+    } else {
+      return { installed: false };
+    }
+  } else if (probe.exitCode === 0) {
+    return { installed: false };
+  }
+
+  opts.onProgress?.(`installing ${spec.id} (${installReason})`);
   // The agent's own settings pick an alternate recipe when it declared one
   // (`claude.install: npm`); an agent that declared none falls through to its
   // default recipe.
@@ -207,7 +230,6 @@ export async function ensureAgentInstalled(
   // start, the dashboard's agent switch, the cloud attach paths) do not — and a
   // host that set npm BECAUSE the native CDN 403s would otherwise hit that same
   // CDN when adding claude to an existing box.
-  const settings = opts.settings ?? (await resolveConfiguredSettings(spec.id));
   const install = resolveAgentInstall(spec.install, settings);
 
   if (install.packages && install.packages.length > 0) {
@@ -266,6 +288,21 @@ export async function ensureAgentInstalled(
     throw new AgentInstallError(
       `${spec.id}: the installer reported success but \`${spec.binary}\` is still not on PATH in the box.`,
     );
+  }
+  if (spec.id === 'pi') {
+    const expected = settings?.['version'];
+    if (typeof expected === 'string' && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(expected)) {
+      const actual = await transport.exec(['sh', '-lc', `${spec.binary} --version`]);
+      const version =
+        actual.exitCode === 0
+          ? actual.stdout.trim().match(/\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/)?.[0]
+          : undefined;
+      if (version !== expected) {
+        throw new AgentInstallError(
+          `${spec.id}: installed version ${version ?? 'unknown'} does not match configured version ${expected}.`,
+        );
+      }
+    }
   }
 
   // Seed the login, as FILES rather than a mount.

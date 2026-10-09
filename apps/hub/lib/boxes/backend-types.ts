@@ -346,6 +346,24 @@ export type BranchList =
 // detached queue worker; progress streams over the per-job log SSE.
 export type CreateBoxResult = { ok: true; jobId: string } | { ok: false; error: string };
 
+export interface StartBoxAgentInput {
+  agent: AgentId;
+  prompt?: string;
+  args?: string[];
+  sessionName?: string;
+  sessionLabel?: string;
+}
+
+export type StartBoxAgentResult =
+  | {
+      ok: true;
+      agent: AgentId;
+      sessionName: string;
+      sessionLabel: string;
+      installed: boolean;
+    }
+  | { ok: false; error: string };
+
 // One subdirectory in the server-side folder browser. `isProject` flags a folder
 // that already looks like a project root (has a .git or agentbox.yaml) so the UI
 // can hint which folders are ready to host a box.
@@ -589,6 +607,9 @@ export interface HubBackend extends WorkspaceBackend, ManagerBackend, TimelineBa
   providersWithFreshness(opts?: { expandRemoteDockerHosts?: boolean }): Promise<ProviderOption[]>;
   // Enqueue a background create job for a registered project; returns the jobId.
   create(input: CreateBoxInput, meta?: TimelineMeta): Promise<CreateBoxResult>;
+  // Install (or exact-version repair) and launch an agent in an existing box.
+  // Credential profiles and attempt packages are layered onto this path later.
+  startAgent(id: string, input: StartBoxAgentInput): Promise<StartBoxAgentResult>;
   // What would a create for this project + agent ask the user? Runs the real
   // gates with a collecting asker, so the questions returned here are by
   // construction the questions `create` asks.

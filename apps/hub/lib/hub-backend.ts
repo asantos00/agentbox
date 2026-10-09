@@ -33,7 +33,9 @@ import {
   normalizeAgentStatus,
   normalizeLastAgent,
   persistentRefusal,
+  resolveAgentLauncher,
   resolveCreatePersistent,
+  toQueueKind,
   type BoxRecord,
   type CloudSandboxSummary,
   type ExecResult,
@@ -140,6 +142,7 @@ import {
   listCloudCheckpoints,
   openWebAppOnVncScreen,
   resolveCloudCheckpoint,
+  startDetachedCloudAgent,
   type BaseStatus,
   type CloudCheckpointInfo,
 } from '@agentbox/sandbox-cloud';
@@ -177,6 +180,8 @@ import type {
   CreateBoxInput,
   CreateBoxResult,
   CreatePreflightResult,
+  StartBoxAgentInput,
+  StartBoxAgentResult,
   CreateProjectInput,
   DirEntry,
   GitInfo,
@@ -2497,6 +2502,42 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
       }
       handle.subscribers.broadcast(boxId, 'prompt-resolved', { id });
       return Promise.resolve({ ok: true });
+    },
+    async startAgent(id: string, input: StartBoxAgentInput): Promise<StartBoxAgentResult> {
+      try {
+        const resolved = await resolveBoxProvider(id, hydrate);
+        if (!resolved) return { ok: false, error: `box ${id} not found` };
+        const spec = findAgentSpec(input.agent);
+        if (!spec || spec.caps.surface !== 'tui') {
+          return { ok: false, error: `agent ${input.agent} cannot start as a detached TUI` };
+        }
+        const sessionName = input.sessionName?.trim() || spec.sessionName;
+        const sessionLabel = input.sessionLabel?.trim() || resolved.box.name;
+        const extraArgs = resolveAgentLauncher(toQueueKind(input.agent)).buildArgs(
+          input.prompt ?? '',
+          input.args ?? [],
+        );
+        let installed = false;
+        await startDetachedCloudAgent({
+          provider: resolved.provider,
+          box: resolved.box,
+          binary: spec.binary,
+          sessionName,
+          extraArgs,
+          onInstalled: (value) => {
+            installed = value;
+          },
+        });
+        await mutateState((state) => ({
+          ...state,
+          boxes: state.boxes.map((box) =>
+            box.id === resolved.box.id ? { ...box, lastAgent: input.agent } : box,
+          ),
+        }));
+        return { ok: true, agent: input.agent, sessionName, sessionLabel, installed };
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
     },
     async create(input: CreateBoxInput): Promise<CreateBoxResult> {
       try {

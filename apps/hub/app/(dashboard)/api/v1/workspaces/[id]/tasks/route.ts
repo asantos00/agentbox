@@ -5,6 +5,7 @@
 import { backendOrNull } from '../../../lib/backend';
 import { timelineMeta } from '../../../lib/actor';
 import { fail, failFromAction, ok } from '../../../lib/envelope';
+import { journaledApiMutation } from '../../../lib/idempotency';
 import { isTaskStatus, parseTaskCreate, readJson } from '../../../lib/validate';
 import type { TaskFilter } from '@/lib/boxes/backend-types';
 
@@ -49,11 +50,27 @@ export async function POST(
   if (!parsed.ok) return fail('invalid_request', parsed.message);
 
   const { note, ...input } = parsed.value;
-  const res = await backend.addTask(
-    id,
-    input,
-    await timelineMeta(req, backend, { wsId: id, note }),
-  );
+  const meta = await timelineMeta(req, backend, { wsId: id, note });
+  const mutation = await journaledApiMutation({
+    req,
+    kind: 'task.create',
+    request: { workspaceId: id, ...input },
+    reconcile: () =>
+      Promise.resolve({
+        state: 'unreconcilable',
+        reason: 'the task store predates operation tags; refusing a duplicate task create',
+      }),
+    effect: () => backend.addTask(id, input, meta),
+  });
+  if (!mutation.ok) return mutation.response;
+  const res = mutation.value;
   if (!res.ok) return res.invalid ? fail('invalid_request', res.error) : failFromAction(res.error);
-  return ok(res.task, 201);
+  return ok(
+    {
+      ...res.task,
+      replayed: mutation.replayed,
+      ...(mutation.operationTag ? { operationTag: mutation.operationTag } : {}),
+    },
+    201,
+  );
 }
