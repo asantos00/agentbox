@@ -24,6 +24,11 @@ import {
   type CustodyEntry,
   type CustodyStore,
 } from './store.js';
+import {
+  CredentialProfileConflictError,
+  CredentialProfileError,
+  CredentialProfileStore,
+} from './profiles.js';
 
 /** Structurally identical to `RelayResponse` in `core/handler.ts` (kept local to avoid a cycle). */
 export interface CustodyResponse {
@@ -88,6 +93,40 @@ export async function handleCustodyRequest(
   }
 
   try {
+    if (req.path === `${CUSTODY_PATH_PREFIX}/profiles`) {
+      const profiles = new CredentialProfileStore(store);
+      if (req.method === 'GET') {
+        const agentId = req.query.get('agentId') ?? undefined;
+        return { status: 200, body: { profiles: await profiles.list(agentId) } };
+      }
+      let parsed: { agentId?: unknown; profileId?: unknown; data?: unknown; expectedSha256?: unknown };
+      try {
+        parsed = JSON.parse(req.bodyText.length === 0 ? '{}' : req.bodyText) as typeof parsed;
+      } catch {
+        return { status: 400, body: { error: 'expected JSON credential profile request' } };
+      }
+      if (typeof parsed.agentId !== 'string' || typeof parsed.profileId !== 'string') {
+        return { status: 400, body: { error: 'expected {agentId, profileId}' } };
+      }
+      const expectedSha256 = typeof parsed.expectedSha256 === 'string' ? parsed.expectedSha256 : undefined;
+      if (req.method === 'PUT') {
+        if (typeof parsed.data !== 'string') return { status: 400, body: { error: 'expected {data: <base64>}' } };
+        const data = Buffer.from(parsed.data, 'base64');
+        if (data.toString('base64') !== parsed.data.replace(/\s+/g, '')) {
+          return { status: 400, body: { error: 'data is not valid base64' } };
+        }
+        const profile = await profiles.update({ agentId: parsed.agentId, profileId: parsed.profileId }, data, expectedSha256);
+        log(`credential profile update ${profile.agentId}/${profile.profileId} (${String(profile.size)} bytes)`);
+        return { status: 200, body: profile };
+      }
+      if (req.method === 'DELETE') {
+        const profile = await profiles.revoke({ agentId: parsed.agentId, profileId: parsed.profileId }, expectedSha256);
+        log(`credential profile revoke ${profile.agentId}/${profile.profileId}`);
+        return { status: 200, body: profile };
+      }
+      return { status: 405, body: { error: 'method not allowed' } };
+    }
+
     if (req.path === CUSTODY_PATH_PREFIX) {
       if (req.method !== 'GET') return { status: 405, body: { error: 'method not allowed' } };
       const rawPrefix = req.query.get('prefix');
@@ -140,7 +179,8 @@ export async function handleCustodyRequest(
 
     return { status: 405, body: { error: 'method not allowed' } };
   } catch (err) {
-    if (err instanceof CustodyPathError) return { status: 400, body: { error: err.message } };
+    if (err instanceof CredentialProfileConflictError) return { status: 409, body: { error: err.message } };
+    if (err instanceof CredentialProfileError || err instanceof CustodyPathError) return { status: 400, body: { error: err.message } };
     const msg = err instanceof Error ? err.message : String(err);
     log(`custody error: ${msg}`);
     return { status: 500, body: { error: `custody: ${msg}` } };

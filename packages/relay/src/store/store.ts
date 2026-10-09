@@ -91,6 +91,7 @@ export const PORTABLE_CREATE_OPT_KEYS = [
   'build',
   'credentialSync',
   'borrowCredentials',
+  'credentialProfiles',
   'size',
   'location',
   'inbound',
@@ -126,6 +127,8 @@ export interface CreateJobRequestOpts {
    * rather than whatever the VPS happens to hold.
    */
   borrowCredentials?: string[];
+  /** Metadata-only named credential selections. */
+  credentialProfiles?: { agentId: string; profileId: string }[];
   /**
    * VM size and location for a cloud box (`--size`/`--location`, or the
    * project's `box.size<Provider>` / `box.<provider>Location`).

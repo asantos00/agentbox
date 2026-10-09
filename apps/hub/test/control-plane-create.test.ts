@@ -226,6 +226,7 @@ describe('the portable key list is the mapping', () => {
     build: true,
     credentialSync: false,
     borrowCredentials: ['codex'],
+    credentialProfiles: [{ agentId: 'codex', profileId: 'default' }],
     size: 'cx33',
     location: 'nbg1',
     inbound: 'locked',

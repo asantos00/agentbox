@@ -1433,6 +1433,9 @@ export function createCloudProvider(
           ...(req.borrowCredentials && req.borrowCredentials.length > 0
             ? { borrowedCredentials: [...req.borrowCredentials] }
             : {}),
+          ...(req.credentialProfiles && req.credentialProfiles.length > 0
+            ? { credentialProfiles: [...req.credentialProfiles] }
+            : {}),
           relayToken,
           withPlaywright: req.withPlaywright,
           withEnv: req.withEnv,

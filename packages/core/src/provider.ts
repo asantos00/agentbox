@@ -16,6 +16,12 @@ import type { ProviderSync } from './sync/provider-sync.js';
 import type { AgentId } from './sync/agent-kind.js';
 import type { AgentSettings } from './sync/agent-spec.js';
 
+/** A stable, metadata-only credential selection. Credential bytes never travel with this value. */
+export interface CredentialProfileSelection {
+  agentId: string;
+  profileId: string;
+}
+
 /** Coarse lifecycle state, identical across providers. */
 export type BoxRuntimeState = 'running' | 'paused' | 'stopped' | 'missing';
 
@@ -150,6 +156,11 @@ export interface CreateBoxRequest {
    * `resolveBorrowedCredentials`; an id the agent does not declare is refused.
    */
   borrowCredentials?: string[];
+  /**
+   * Canonical named credential selections. This U5 metadata is persisted for
+   * validation/audit only; U11 will make staging consume it.
+   */
+  credentialProfiles?: CredentialProfileSelection[];
   /** Override the base image / snapshot. */
   image?: string;
   /**

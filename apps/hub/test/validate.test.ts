@@ -154,6 +154,18 @@ describe('parseCreateBox', () => {
     expect(r.value.opts?.borrowCredentials).toEqual(['codex']);
   });
 
+  it('rejects mixed, duplicate, ambiguous, or malformed credential profiles', () => {
+    const base = { projectId: 'p', agent: 'pi' };
+    expect(parseCreateBox({ ...base, opts: { borrowCredentials: ['codex'], credentialProfiles: [] } }).ok).toBe(false);
+    expect(
+      parseCreateBox({
+        ...base,
+        opts: { credentialProfiles: [{ agentId: 'codex', profileId: 'one' }, { agentId: 'codex', profileId: 'two' }] },
+      }).ok,
+    ).toBe(false);
+    expect(parseCreateBox({ ...base, opts: { credentialProfiles: [{ agentId: 'codex', profileId: '../bad' }] } }).ok).toBe(false);
+  });
+
   it('threads the three carry decision flags through', () => {
     // `carrySkip` is the one a CLI create needs to say "the human already
     // declined": without it the hub re-asked the `required` carry prompt with no

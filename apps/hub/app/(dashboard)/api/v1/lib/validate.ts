@@ -309,6 +309,33 @@ function parseCreateBoxOpts(v: unknown): Parsed<CreateBoxOpts | undefined> {
   const bc = optionalStringArray(v.borrowCredentials, 'opts.borrowCredentials');
   if (!bc.ok) return bc;
   if (bc.value !== undefined) out.borrowCredentials = bc.value;
+  if (v.credentialProfiles !== undefined) {
+    if (bc.value !== undefined) {
+      return { ok: false, message: 'opts.borrowCredentials and opts.credentialProfiles cannot be combined' };
+    }
+    if (!Array.isArray(v.credentialProfiles)) {
+      return { ok: false, message: 'opts.credentialProfiles must be an array' };
+    }
+    const profiles: { agentId: string; profileId: string }[] = [];
+    const agents = new Set<string>();
+    const selections = new Set<string>();
+    for (const [i, profile] of v.credentialProfiles.entries()) {
+      if (!isObject(profile) || typeof profile.agentId !== 'string' || typeof profile.profileId !== 'string') {
+        return { ok: false, message: `opts.credentialProfiles[${String(i)}] must be { agentId: string, profileId: string }` };
+      }
+      if (!/^[a-z][a-z0-9-]{0,63}$/.test(profile.agentId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile.profileId)) {
+        return { ok: false, message: `opts.credentialProfiles[${String(i)}] has an invalid agentId or profileId` };
+      }
+      const selection = `${profile.agentId}\u0000${profile.profileId}`;
+      if (selections.has(selection) || agents.has(profile.agentId)) {
+        return { ok: false, message: 'opts.credentialProfiles may select only one unique profile per agent' };
+      }
+      selections.add(selection);
+      agents.add(profile.agentId);
+      profiles.push({ agentId: profile.agentId, profileId: profile.profileId });
+    }
+    out.credentialProfiles = profiles;
+  }
   // promptAnswers: PromptAnswer[] — the client's answers to create-preflight.
   // Only the shape is checked here; the backend matches each id against the
   // question it actually asks, and refuses a stale one.

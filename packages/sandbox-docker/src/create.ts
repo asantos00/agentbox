@@ -73,7 +73,12 @@ import {
   type BoxRecord,
   type GitWorktreeRecord,
 } from './state.js';
-import { generateBoxId, type ResolvedCarryEntry, type ResyncResult } from '@agentbox/core';
+import {
+  generateBoxId,
+  type CredentialProfileSelection,
+  type ResolvedCarryEntry,
+  type ResyncResult,
+} from '@agentbox/core';
 import { createSnapshot, snapshotPathFor } from './snapshot.js';
 import { resolveCheckpoint } from './checkpoint.js';
 import { computeDockerContextFingerprint, readPreparedDockerState } from './prepared-state.js';
@@ -177,6 +182,8 @@ export interface CreateBoxOptions {
    * validated against the agent's declaration by the caller.
    */
   borrowCredentials?: string[];
+  /** Metadata-only profile selection; staging remains the legacy path until U11. */
+  credentialProfiles?: CredentialProfileSelection[];
   /**
    * Claude Code config volume. When omitted, defaults to `{ isolate: false }` —
    * every box mounts the shared `agentbox-claude-config` volume at
@@ -976,6 +983,9 @@ export async function createBox(opts: CreateBoxOptions): Promise<CreatedBox> {
     ...(opts.agents && opts.agents.length > 0 ? { agents: [...opts.agents] } : {}),
     ...(opts.borrowCredentials && opts.borrowCredentials.length > 0
       ? { borrowedCredentials: [...opts.borrowCredentials] }
+      : {}),
+    ...(opts.credentialProfiles && opts.credentialProfiles.length > 0
+      ? { credentialProfiles: [...opts.credentialProfiles] }
       : {}),
     withPlaywright: opts.withPlaywright ? true : undefined,
     withEnv: opts.withEnv ? true : undefined,

@@ -20,6 +20,7 @@ import { parseProviderSpec } from '@agentbox/config';
 import {
   cloneRepoWithLfs,
   drainCreateJobs,
+  CredentialProfileStore,
   FsCustodyStore,
   GitHubAppLeaser,
   loadGitHubAppConfig,
@@ -53,6 +54,7 @@ import { resolveAgentLauncher, toQueueKind, type ResolvedCarryEntry } from '@age
 import { hydratePreparedFromCustody } from './prepared-hydrate.js';
 import { HUB_WORKER_CLONE_PREFIX } from './boxes/project-key.js';
 import { createStartsSession, resolveCreateAgentSpec } from './boxes/create-agent.js';
+import { validateCredentialProfileSelections } from './credential-profile-selection.js';
 import { isRuntimeProviderName, loadProviderModuleByName } from './provider-importers.js';
 import type { QueueAgentKind } from '@agentbox/core';
 
@@ -313,6 +315,19 @@ export function makeHubCreateBox(opts: HubWorkerOptions): CreateBoxFn {
       // Resolved BEFORE the provider is loaded, so an unknown agent fails the
       // job here rather than after a box has been built for it.
       const agentSpec = resolveCreateAgentSpec(agent);
+      const credentialProfiles = createOpts?.credentialProfiles ??
+        (createOpts?.borrowCredentials ?? []).map((agentId) => ({ agentId, profileId: 'default' }));
+      if (createOpts?.credentialProfiles !== undefined && createOpts?.borrowCredentials !== undefined) {
+        throw new Error('credentialProfiles and borrowCredentials cannot be combined');
+      }
+      validateCredentialProfileSelections(agentSpec, credentialProfiles);
+      const profileStore = new CredentialProfileStore(custody);
+      for (const selection of credentialProfiles) {
+        const profile = await profileStore.get(selection);
+        if (!profile || profile.health !== 'active') {
+          throw new Error('credential profile is unavailable');
+        }
+      }
       const mod = await loadProviderModuleByName(providerName);
       if (mod.ensureCredentials) await mod.ensureCredentials();
       // Seed agent creds from custody just before create, so provider.create's
@@ -371,6 +386,7 @@ export function makeHubCreateBox(opts: HubWorkerOptions): CreateBoxFn {
         ...(createOpts?.borrowCredentials?.length
           ? { borrowCredentials: createOpts.borrowCredentials }
           : {}),
+        ...(credentialProfiles.length ? { credentialProfiles } : {}),
         // Everything provider-shaped comes from the machine that HAS the project
         // config; this box has neither the checkout nor
         // `~/.agentbox/projects/<hash>`, so resolving any of it here would only

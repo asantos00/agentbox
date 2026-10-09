@@ -82,6 +82,32 @@ describe('custody via the hosted-plane handler', () => {
     expect(del.status).toBe(204);
   });
 
+  it('updates, lists, and revokes named profiles without returning credential bytes', async () => {
+    const data = Buffer.from('profile-secret').toString('base64');
+    const put = await handleRelayRequest(
+      req('PUT', '/admin/custody/profiles', {
+        bearer: ADMIN,
+        body: { agentId: 'codex', profileId: 'personal', data },
+      }),
+      deps,
+    );
+    expect(put.status).toBe(200);
+    expect(JSON.stringify(put.body)).not.toContain('profile-secret');
+
+    const list = await handleRelayRequest(req('GET', '/admin/custody/profiles', { bearer: ADMIN }), deps);
+    expect(list.body).toMatchObject({ profiles: [{ agentId: 'codex', profileId: 'personal', health: 'active' }] });
+    expect(JSON.stringify(list.body)).not.toContain('data');
+
+    const revoke = await handleRelayRequest(
+      req('DELETE', '/admin/custody/profiles', {
+        bearer: ADMIN,
+        body: { agentId: 'codex', profileId: 'personal' },
+      }),
+      deps,
+    );
+    expect(revoke.body).toMatchObject({ health: 'revoked' });
+  });
+
   it('re-put of identical bytes reports changed:false', async () => {
     const b = Buffer.from('same').toString('base64');
     const path = '/admin/custody/projects/p/.env';

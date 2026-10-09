@@ -177,6 +177,8 @@ export interface CreateBoxOpts {
   persistent?: boolean;
   /** Other agents' host logins to seed as model auth (`--model-auth`; service agents). */
   borrowCredentials?: string[];
+  /** Metadata-only named credential selections. */
+  credentialProfiles?: { agentId: string; profileId: string }[];
   resync?: boolean;
   sharedDockerCache?: boolean;
   portless?: boolean;

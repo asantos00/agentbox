@@ -42,6 +42,7 @@ export type {
   PrepareOptions,
   PrepareResult,
   CarryItem,
+  CredentialProfileSelection,
   Provider,
   ProviderCheckpoint,
   ResolvedCarryEntry,

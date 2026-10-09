@@ -32,6 +32,9 @@ export const DEFAULT_CUSTODY_DIR = join(STATE_DIR, 'hub', 'custody');
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
+const PROFILE_LOCK_STALE_MS = 30_000;
+const PROFILE_LOCK_RETRIES = 100;
+const PROFILE_LOCK_RETRY_MS = 10;
 
 export interface FsCustodyStoreOptions {
   /** Custody root. Defaults to {@link DEFAULT_CUSTODY_DIR}. */
@@ -43,6 +46,37 @@ export class FsCustodyStore implements CustodyStore {
 
   constructor(opts: FsCustodyStoreOptions = {}) {
     this.root = opts.root ?? DEFAULT_CUSTODY_DIR;
+  }
+
+  /**
+   * Serialize one profile mutation across hub processes. Lock directories are
+   * root-contained opaque digests, so neither errors nor the filesystem expose
+   * credential paths. A stale lock is removed only after its bounded lease;
+   * crash recovery therefore cannot block the profile forever.
+   */
+  async withProfileLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const locksRoot = join(this.root, '.profile-locks');
+    const lock = join(locksRoot, createHash('sha256').update(key).digest('hex'));
+    await mkdir(locksRoot, { recursive: true, mode: DIR_MODE });
+    for (let attempt = 0; attempt < PROFILE_LOCK_RETRIES; attempt += 1) {
+      try {
+        await mkdir(lock, { mode: DIR_MODE });
+        try {
+          return await operation();
+        } finally {
+          await rm(lock, { recursive: true, force: true });
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        const existing = await stat(lock).catch(() => null);
+        if (existing && Date.now() - existing.mtimeMs > PROFILE_LOCK_STALE_MS) {
+          await rm(lock, { recursive: true, force: true }).catch(() => {});
+          continue;
+        }
+        await new Promise((resolve) => setTimeout(resolve, PROFILE_LOCK_RETRY_MS));
+      }
+    }
+    throw new Error('credential profile operation is busy; retry');
   }
 
   async put(path: string, data: Buffer): Promise<CustodyPutResult> {

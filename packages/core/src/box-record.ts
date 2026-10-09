@@ -9,6 +9,7 @@ import type { InboundPolicy } from './cloud-backend.js';
 import type { BoxRuntimeState } from './provider.js';
 import type { SyncTopology } from './sync/types.js';
 import type { AgentId } from './sync/agent-kind.js';
+import type { CredentialProfileSelection } from './provider.js';
 
 /** Sandbox backend a box runs on. Open-ended so future providers need no core change. */
 export type ProviderName = 'docker' | 'daytona' | 'hetzner' | (string & {});
@@ -493,6 +494,8 @@ export interface BoxRecord {
    * clone can borrow the same set. One-way: never a source for extraction.
    */
   borrowedCredentials?: string[];
+  /** Canonical named credential selections. U5 records metadata only; U11 stages it. */
+  credentialProfiles?: CredentialProfileSelection[];
   createdAt: string; // ISO-8601
 }
 

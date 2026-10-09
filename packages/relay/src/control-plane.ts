@@ -51,3 +51,11 @@ export {
   normalizeCustodyPath,
 } from './custody/store.js';
 export { FsCustodyStore, DEFAULT_CUSTODY_DIR } from './custody/fs-store.js';
+export {
+  CredentialProfileStore,
+  CredentialProfileError,
+  CredentialProfileConflictError,
+  DEFAULT_CREDENTIAL_PROFILE_ID,
+  credentialProfilePath,
+  type CredentialProfileMetadata,
+} from './custody/profiles.js';

@@ -17,6 +17,7 @@ import { normalizeAgentStatus, pickPrimaryAgent } from '@agentbox/core';
 import type {
   AgentActivityState,
   BoxRecord,
+  CredentialProfileSelection,
   QueueAgentKind,
   ResolvedCarryEntry,
 } from '@agentbox/core';
@@ -234,6 +235,8 @@ export interface QueueJobCreateOpts {
   persistent?: boolean;
   /** Other agents' host logins to seed as model auth (`--model-auth`; service agents). */
   borrowCredentials?: string[];
+  /** Canonical profile selections; validation only until U11 staging. */
+  credentialProfiles?: CredentialProfileSelection[];
   /** `--no-resync` → false; resync the box with the host on (checkpoint) create. */
   resync?: boolean;
   sharedDockerCache?: boolean;
