@@ -105,7 +105,10 @@ describe('startDetachedCloudAgent', () => {
 
   it('rejects an unattended version mismatch before install, staging, or launch', async () => {
     const events: string[] = [];
-    const { provider } = fakeProvider({ onEvent: (event) => events.push(event) });
+    const { provider } = fakeProvider({
+      state: 'paused',
+      onEvent: (event) => events.push(event),
+    });
     await expect(
       startDetachedCloudAgent({
         provider,

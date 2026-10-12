@@ -347,20 +347,21 @@ export async function startDetachedCloudAgent(
 ): Promise<BoxRecord> {
   const { provider, binary, sessionName } = args;
   let box = args.box;
+  // Resolve server-owned settings before the first provider or in-box effect.
+  // An unattended caller may pin the exact reviewed version, but cannot
+  // override the setting.
+  const agentSettings = isRuntimeAgent(binary)
+    ? await resolveBoxAgentSettings(box, binary)
+    : undefined;
+  if (args.expectedVersion !== undefined && agentSettings?.['version'] !== args.expectedVersion) {
+    throw new Error('requested agent version does not match the box configuration');
+  }
   const state = await provider.probeState(box);
   if (state === 'missing') {
     throw new Error(`cloud sandbox for ${box.name} is missing; was it destroyed?`);
   }
   if (state !== 'running') {
     box = await provider.start(box);
-  }
-  // Resolve server-owned settings before the first in-box effect. An unattended
-  // caller may pin the exact reviewed version, but cannot override the setting.
-  const agentSettings = isRuntimeAgent(binary)
-    ? await resolveBoxAgentSettings(box, binary)
-    : undefined;
-  if (args.expectedVersion !== undefined && agentSettings?.['version'] !== args.expectedVersion) {
-    throw new Error('requested agent version does not match the box configuration');
   }
 
   // Installation is the first in-box effect. Existing-box starts used to seed
