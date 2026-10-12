@@ -354,6 +354,8 @@ export interface StartBoxAgentInput {
   args?: string[];
   sessionName?: string;
   sessionLabel?: string;
+  /** Exact reviewed binary version required by unattended orchestrator starts. */
+  expectedVersion?: string;
   /** Selected model-auth profiles; stable metadata only, never credential bytes. */
   credentialProfiles?: { agentId: string; profileId: string }[];
 }
@@ -365,6 +367,8 @@ export type StartBoxAgentResult =
       sessionName: string;
       sessionLabel: string;
       installed: boolean;
+      /** Present when the request supplied and the box configuration matched an exact version. */
+      version?: string;
     }
   | { ok: false; error: string };
 

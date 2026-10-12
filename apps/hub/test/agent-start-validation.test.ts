@@ -9,18 +9,35 @@ describe('existing-box agent start request', () => {
     });
   });
 
-  it('accepts bounded naming hooks and launch args', () => {
+  it('accepts bounded naming hooks, launch args, and an exact expected version', () => {
     expect(
       parseStartBoxAgent({
         agent: 'pi',
         args: ['--model', 'openai-codex/gpt-5'],
         sessionName: 'pi-task-7',
         sessionLabel: 'Personal Task 7',
+        expectedVersion: '0.85.1',
       }),
-    ).toMatchObject({ ok: true });
+    ).toEqual({
+      ok: true,
+      value: {
+        agent: 'pi',
+        args: ['--model', 'openai-codex/gpt-5'],
+        sessionName: 'pi-task-7',
+        sessionLabel: 'Personal Task 7',
+        expectedVersion: '0.85.1',
+      },
+    });
   });
 
-  it('does not carry profile fields owned by later units', () => {
+  it('rejects missing or malformed orchestrator version pins when supplied', () => {
+    expect(parseStartBoxAgent({ agent: 'pi', expectedVersion: '' })).toMatchObject({ ok: false });
+    expect(parseStartBoxAgent({ agent: 'pi', expectedVersion: 'latest' })).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it('does not carry legacy singular profile fields', () => {
     const parsed = parseStartBoxAgent({ agent: 'pi', credentialProfile: 'personal' });
     // Unknown fields are deliberately ignored by this narrow U4 request parser,
     // so they cannot influence staging; the resulting value proves none crossed.

@@ -105,7 +105,8 @@ export function parseStartBoxAgent(
   allowedAgents: readonly string[] = AGENTS.filter((agent) => agent !== 'none'),
 ): Parsed<StartBoxAgentInput> {
   if (!isObject(body)) return { ok: false, message: 'body must be a JSON object' };
-  const { agent, prompt, args, sessionName, sessionLabel, credentialProfiles } = body;
+  const { agent, prompt, args, sessionName, sessionLabel, expectedVersion, credentialProfiles } =
+    body;
   if (typeof agent !== 'string' || !allowedAgents.includes(agent)) {
     return { ok: false, message: `agent must be one of ${allowedAgents.join(', ')}` };
   }
@@ -121,12 +122,26 @@ export function parseStartBoxAgent(
   ) {
     return { ok: false, message: 'sessionName must be a valid tmux session name' };
   }
+  if (
+    expectedVersion !== undefined &&
+    (typeof expectedVersion !== 'string' ||
+      !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(expectedVersion))
+  ) {
+    return { ok: false, message: 'expectedVersion must be an exact semantic version' };
+  }
   if (credentialProfiles !== undefined) {
-    if (!Array.isArray(credentialProfiles)) return { ok: false, message: 'credentialProfiles must be an array' };
+    if (!Array.isArray(credentialProfiles))
+      return { ok: false, message: 'credentialProfiles must be an array' };
     const selectedAgents = new Set<string>();
     for (const profile of credentialProfiles) {
-      if (!isObject(profile) || typeof profile.agentId !== 'string' || typeof profile.profileId !== 'string' ||
-        !/^[a-z][a-z0-9-]{0,63}$/.test(profile.agentId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile.profileId) || selectedAgents.has(profile.agentId)) {
+      if (
+        !isObject(profile) ||
+        typeof profile.agentId !== 'string' ||
+        typeof profile.profileId !== 'string' ||
+        !/^[a-z][a-z0-9-]{0,63}$/.test(profile.agentId) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile.profileId) ||
+        selectedAgents.has(profile.agentId)
+      ) {
         return { ok: false, message: 'credentialProfiles must select one valid profile per agent' };
       }
       selectedAgents.add(profile.agentId);
@@ -148,7 +163,10 @@ export function parseStartBoxAgent(
       ...(args === undefined ? {} : { args }),
       ...(sessionName === undefined ? {} : { sessionName }),
       ...(sessionLabel === undefined ? {} : { sessionLabel }),
-      ...(credentialProfiles === undefined ? {} : { credentialProfiles: credentialProfiles as { agentId: string; profileId: string }[] }),
+      ...(expectedVersion === undefined ? {} : { expectedVersion }),
+      ...(credentialProfiles === undefined
+        ? {}
+        : { credentialProfiles: credentialProfiles as { agentId: string; profileId: string }[] }),
     },
   };
 }
@@ -323,7 +341,10 @@ function parseCreateBoxOpts(v: unknown): Parsed<CreateBoxOpts | undefined> {
   if (bc.value !== undefined) out.borrowCredentials = bc.value;
   if (v.credentialProfiles !== undefined) {
     if (bc.value !== undefined) {
-      return { ok: false, message: 'opts.borrowCredentials and opts.credentialProfiles cannot be combined' };
+      return {
+        ok: false,
+        message: 'opts.borrowCredentials and opts.credentialProfiles cannot be combined',
+      };
     }
     if (!Array.isArray(v.credentialProfiles)) {
       return { ok: false, message: 'opts.credentialProfiles must be an array' };
@@ -332,15 +353,31 @@ function parseCreateBoxOpts(v: unknown): Parsed<CreateBoxOpts | undefined> {
     const agents = new Set<string>();
     const selections = new Set<string>();
     for (const [i, profile] of v.credentialProfiles.entries()) {
-      if (!isObject(profile) || typeof profile.agentId !== 'string' || typeof profile.profileId !== 'string') {
-        return { ok: false, message: `opts.credentialProfiles[${String(i)}] must be { agentId: string, profileId: string }` };
+      if (
+        !isObject(profile) ||
+        typeof profile.agentId !== 'string' ||
+        typeof profile.profileId !== 'string'
+      ) {
+        return {
+          ok: false,
+          message: `opts.credentialProfiles[${String(i)}] must be { agentId: string, profileId: string }`,
+        };
       }
-      if (!/^[a-z][a-z0-9-]{0,63}$/.test(profile.agentId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile.profileId)) {
-        return { ok: false, message: `opts.credentialProfiles[${String(i)}] has an invalid agentId or profileId` };
+      if (
+        !/^[a-z][a-z0-9-]{0,63}$/.test(profile.agentId) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profile.profileId)
+      ) {
+        return {
+          ok: false,
+          message: `opts.credentialProfiles[${String(i)}] has an invalid agentId or profileId`,
+        };
       }
       const selection = `${profile.agentId}\u0000${profile.profileId}`;
       if (selections.has(selection) || agents.has(profile.agentId)) {
-        return { ok: false, message: 'opts.credentialProfiles may select only one unique profile per agent' };
+        return {
+          ok: false,
+          message: 'opts.credentialProfiles may select only one unique profile per agent',
+        };
       }
       selections.add(selection);
       agents.add(profile.agentId);

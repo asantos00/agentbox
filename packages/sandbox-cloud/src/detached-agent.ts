@@ -261,6 +261,8 @@ export interface StartDetachedCloudAgentArgs {
   onProgress?: (line: string) => void;
   /** Reports whether this start installed/repaired the requested agent. */
   onInstalled?: (installed: boolean) => void;
+  /** Exact configured version required by unattended callers before any box effect. */
+  expectedVersion?: string;
   /** AgentBox-owned selected-profile stage, after install and before ingest/tmux. */
   stageCredentialProfiles?: (transport: SyncTransport) => Promise<void>;
 }
@@ -352,6 +354,15 @@ export async function startDetachedCloudAgent(
   if (state !== 'running') {
     box = await provider.start(box);
   }
+  // Resolve server-owned settings before the first in-box effect. An unattended
+  // caller may pin the exact reviewed version, but cannot override the setting.
+  const agentSettings = isRuntimeAgent(binary)
+    ? await resolveBoxAgentSettings(box, binary)
+    : undefined;
+  if (args.expectedVersion !== undefined && agentSettings?.['version'] !== args.expectedVersion) {
+    throw new Error('requested agent version does not match the box configuration');
+  }
+
   // Installation is the first in-box effect. Existing-box starts used to seed
   // and launch directly, so an agentless box produced only tmux's later "no
   // server running" symptom. `ensureAgentInstalled` also enforces Pi's exact
@@ -359,7 +370,7 @@ export async function startDetachedCloudAgent(
   if (isRuntimeAgent(binary)) {
     const transport = provider.syncTransport?.(box) ?? execOnlyTransport(provider, box);
     const installed = await ensureAgentInstalled(transport, binary, {
-      settings: await resolveBoxAgentSettings(box, binary),
+      settings: agentSettings,
       ...(args.onProgress ? { onProgress: args.onProgress } : {}),
     });
     args.onInstalled?.(installed.installed);
@@ -372,12 +383,17 @@ export async function startDetachedCloudAgent(
   // config/credential staging or tmux launch.
   await seedDeclaredFilesForLaunch(provider, box, binary);
   if (args.stageCredentialProfiles) {
-    await args.stageCredentialProfiles(provider.syncTransport?.(box) ?? execOnlyTransport(provider, box));
+    await args.stageCredentialProfiles(
+      provider.syncTransport?.(box) ?? execOnlyTransport(provider, box),
+    );
   }
   // Same seam, same reason as the docker path: after the binary exists, before
   // the session starts. Hash-gated, so a warm start is a no-op unless the
   // credential fan-out has pushed a refreshed login since the last one.
-  if (((box.borrowedCredentials ?? []).length > 0 || args.stageCredentialProfiles) && isRuntimeAgent(binary)) {
+  if (
+    ((box.borrowedCredentials ?? []).length > 0 || args.stageCredentialProfiles) &&
+    isRuntimeAgent(binary)
+  ) {
     await runModelAuthIngest(
       resolveAgentSpec(binary),
       async (argv) => {
@@ -397,7 +413,7 @@ export async function startDetachedCloudAgent(
   const command = buildCloudAttachInnerCommand(
     binary,
     extraArgs,
-    agentTuiEnv(binary, await resolveBoxAgentSettings(box, binary)),
+    agentTuiEnv(binary, agentSettings),
   );
   const attempts = Math.max(1, args.startRetry?.attempts ?? DEFAULT_START_ATTEMPTS);
   const backoffMs = args.startRetry?.backoffMs ?? DEFAULT_START_BACKOFF_MS;

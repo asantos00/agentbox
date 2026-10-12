@@ -2521,7 +2521,8 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
           input.prompt ?? '',
           input.args ?? [],
         );
-        const credentialProfiles = input.credentialProfiles ?? resolved.box.credentialProfiles ?? [];
+        const credentialProfiles =
+          input.credentialProfiles ?? resolved.box.credentialProfiles ?? [];
         try {
           validateCredentialProfileSelections(spec, credentialProfiles);
         } catch {
@@ -2530,7 +2531,8 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
         const profileStore = new CredentialProfileStore(new FsCustodyStore());
         for (const selection of credentialProfiles) {
           const profile = await profileStore.get(selection);
-          if (!profile || profile.health !== 'active') return { ok: false, error: 'credential profile is unavailable' };
+          if (!profile || profile.health !== 'active')
+            return { ok: false, error: 'credential profile is unavailable' };
         }
         let installed = false;
         await startDetachedCloudAgent({
@@ -2539,26 +2541,42 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
           binary: spec.binary,
           sessionName,
           extraArgs,
+          ...(input.expectedVersion === undefined
+            ? {}
+            : { expectedVersion: input.expectedVersion }),
           onInstalled: (value) => {
             installed = value;
           },
           ...(credentialProfiles.length > 0
-            ? { stageCredentialProfiles: async (transport: SyncTransport) => {
-                for (const selection of credentialProfiles) {
-                  await stageCredentialProfile(profileStore, transport, selection);
-                }
-              } }
+            ? {
+                stageCredentialProfiles: async (transport: SyncTransport) => {
+                  for (const selection of credentialProfiles) {
+                    await stageCredentialProfile(profileStore, transport, selection);
+                  }
+                },
+              }
             : {}),
         });
         await mutateState((state) => ({
           ...state,
           boxes: state.boxes.map((box) =>
             box.id === resolved.box.id
-              ? { ...box, lastAgent: input.agent, ...(credentialProfiles.length ? { credentialProfiles } : {}) }
+              ? {
+                  ...box,
+                  lastAgent: input.agent,
+                  ...(credentialProfiles.length ? { credentialProfiles } : {}),
+                }
               : box,
           ),
         }));
-        return { ok: true, agent: input.agent, sessionName, sessionLabel, installed };
+        return {
+          ok: true,
+          agent: input.agent,
+          sessionName,
+          sessionLabel,
+          installed,
+          ...(input.expectedVersion === undefined ? {} : { version: input.expectedVersion }),
+        };
       } catch (err) {
         return { ok: false, error: errMsg(err) };
       }

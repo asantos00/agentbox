@@ -323,7 +323,7 @@ export function buildOpenApi(): Record<string, unknown> {
           tags: ['Boxes'],
           summary: 'Install and start an agent in an existing box',
           description:
-            'Ensures the requested TUI agent and configured exact version are installed, seeds the current default static/credential state, then starts its deterministic tmux session. Named credential profiles and task packages are not part of this operation yet. Accepts Idempotency-Key for durable replay/conflict handling.',
+            'Ensures the requested TUI agent and configured exact version are installed, stages only the selected named credential profiles, then starts its deterministic tmux session. expectedVersion is checked against server-owned box configuration before any in-box effect. Accepts Idempotency-Key for durable replay/conflict handling.',
           parameters: [
             { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
             { name: 'Idempotency-Key', in: 'header', schema: { type: 'string', maxLength: 200 } },
@@ -341,6 +341,23 @@ export function buildOpenApi(): Record<string, unknown> {
                     args: { type: 'array', items: { type: 'string' } },
                     sessionName: { type: 'string' },
                     sessionLabel: { type: 'string', maxLength: 120 },
+                    expectedVersion: {
+                      type: 'string',
+                      pattern: '^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$',
+                    },
+                    credentialProfiles: {
+                      type: 'array',
+                      maxItems: 8,
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          agentId: { type: 'string' },
+                          profileId: { type: 'string' },
+                        },
+                        required: ['agentId', 'profileId'],
+                      },
+                    },
                   },
                   required: ['agent'],
                 },
@@ -354,6 +371,24 @@ export function buildOpenApi(): Record<string, unknown> {
             '404': errorResponse,
             '409': errorResponse,
             '503': errorResponse,
+          },
+        },
+      },
+      '/operations/{key}': {
+        get: {
+          tags: ['Operations'],
+          summary: 'Observe an orchestrator-safe mutation result',
+          description:
+            'Read-only lookup for box.create and agent.launch idempotency keys. Pending or blocked rows are ambiguous and this endpoint never resumes an effect.',
+          parameters: [
+            { name: 'key', in: 'path', required: true, schema: { type: 'string', maxLength: 200 } },
+          ],
+          responses: {
+            '200': { description: 'Absent, committed, or ambiguous operation observation' },
+            '400': errorResponse,
+            '401': errorResponse,
+            '404': errorResponse,
+            '500': errorResponse,
           },
         },
       },

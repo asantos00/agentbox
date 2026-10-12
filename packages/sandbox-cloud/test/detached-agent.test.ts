@@ -44,7 +44,12 @@ function fakeProvider(opts: FakeOpts = {}): {
       exec: (argv: string[]) => {
         if (argv.join(' ').includes('command -v')) opts.onEvent?.('install-check');
         else opts.onEvent?.('seed');
-        return Promise.resolve(opts.installExec?.(argv) ?? { exitCode: 0, stdout: '', stderr: '' });
+        return Promise.resolve(
+          opts.installExec?.(argv) ??
+            (argv.join(' ').includes('--version')
+              ? { exitCode: 0, stdout: 'pi 0.85.1', stderr: '' }
+              : { exitCode: 0, stdout: '', stderr: '' }),
+        );
       },
       pushFile: () => Promise.resolve(),
     }),
@@ -96,6 +101,21 @@ describe('startDetachedCloudAgent', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ sessionName: 'claude', detached: true });
     expect((seen[0] as { command: string }).command).toContain('exec claude');
+  });
+
+  it('rejects an unattended version mismatch before install, staging, or launch', async () => {
+    const events: string[] = [];
+    const { provider } = fakeProvider({ onEvent: (event) => events.push(event) });
+    await expect(
+      startDetachedCloudAgent({
+        provider,
+        box,
+        binary: 'pi',
+        sessionName: 'pi',
+        expectedVersion: '9.9.9',
+      }),
+    ).rejects.toThrow(/does not match/);
+    expect(events).toEqual([]);
   });
 
   it('starts a paused box before launching', async () => {

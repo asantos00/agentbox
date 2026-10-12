@@ -11,6 +11,41 @@ import { fail } from './envelope';
 const journal = new FsOperationJournal();
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
 
+export type ApiOperationObservation =
+  | { state: 'absent' }
+  | {
+      state: 'ambiguous';
+      kind: OperationKind;
+      requestHash: string;
+      operationTag: string;
+    }
+  | {
+      state: 'committed';
+      kind: OperationKind;
+      requestHash: string;
+      operationTag: string;
+      result: unknown;
+    };
+
+/** Read-only journal view. Routes must still restrict kinds and normalize result metadata. */
+export async function observeJournaledApiMutation(
+  source: Pick<FsOperationJournal, 'read'>,
+  key: string,
+): Promise<ApiOperationObservation> {
+  if (!KEY_RE.test(key)) throw new Error('invalid operation key');
+  const entry = await source.read(key);
+  if (!entry) return { state: 'absent' };
+  const identity = {
+    kind: entry.kind,
+    requestHash: entry.requestHash,
+    operationTag: entry.tag,
+  };
+  if (entry.status === 'completed') {
+    return { state: 'committed', ...identity, result: entry.result };
+  }
+  return { state: 'ambiguous', ...identity };
+}
+
 export type JournaledApiResult<T> =
   | { ok: true; value: T; replayed: boolean; operationTag?: string }
   | { ok: false; response: Response };
