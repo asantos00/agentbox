@@ -38,6 +38,8 @@ describe('orchestrator worker bootstrap', () => {
           uid: options?.uid,
         };
       },
+      readText: async (path: string) =>
+        staged?.destination === path ? staged.contents : null,
     } as unknown as SyncTransport;
 
     await stageOrchestratorBootstrap(transport, canonical);

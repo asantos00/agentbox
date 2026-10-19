@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { SyncTransport } from '@agentbox/core';
 
 export const ORCHESTRATOR_BOOTSTRAP_PATH =
-  '/home/vscode/.agentbox-orchestrator-bootstrap.json';
+  '/run/agentbox/credentials/.orchestrator-bootstrap.json';
 
 const CAPABILITY = /^[A-Za-z0-9._~-]{32,512}$/;
 const PROTOCOL = {
@@ -80,7 +80,13 @@ export async function stageOrchestratorBootstrap(
   const source = join(dir, 'bootstrap.json');
   try {
     await writeFile(source, canonical, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    await transport.pushFile(source, ORCHESTRATOR_BOOTSTRAP_PATH, { uid: 1000, mode: 0o600 });
+    await transport.pushFile(source, ORCHESTRATOR_BOOTSTRAP_PATH, {
+      uid: 1000,
+      mode: 0o600,
+    });
+    if ((await transport.readText(ORCHESTRATOR_BOOTSTRAP_PATH)) !== canonical) {
+      throw new Error('orchestrator bootstrap staging verification failed');
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
