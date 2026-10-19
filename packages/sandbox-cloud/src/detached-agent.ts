@@ -389,9 +389,6 @@ export async function startDetachedCloudAgent(
   if (args.stageCredentialProfiles) {
     await args.stageCredentialProfiles(launchTransport);
   }
-  if (args.stageLaunchBootstrap) {
-    await args.stageLaunchBootstrap(launchTransport);
-  }
   // Same seam, same reason as the docker path: after the binary exists, before
   // the session starts. Hash-gated, so a warm start is a no-op unless the
   // credential fan-out has pushed a refreshed login since the last one.
@@ -407,6 +404,12 @@ export async function startDetachedCloudAgent(
       },
       {},
     );
+  }
+  // Model-auth ingestion may replace files in the private credential runtime.
+  // Stage the one-shot worker bootstrap after it so cleanup cannot remove the
+  // file before the agent's immutable initial prompt reads it.
+  if (args.stageLaunchBootstrap) {
+    await args.stageLaunchBootstrap(launchTransport);
   }
   let extraArgs = args.extraArgs;
   if ((!extraArgs || extraArgs.length === 0) && args.resolveResumeArgs) {
