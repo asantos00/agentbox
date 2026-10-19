@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SyncTransport } from '@agentbox/core';
 
-export const ORCHESTRATOR_BOOTSTRAP_PATH = '/tmp/.agentbox-orchestrator-bootstrap.json';
+export const ORCHESTRATOR_BOOTSTRAP_PATH =
+  '/home/vscode/.agentbox-orchestrator-bootstrap.json';
 
 const CAPABILITY = /^[A-Za-z0-9._~-]{32,512}$/;
 const PROTOCOL = {
