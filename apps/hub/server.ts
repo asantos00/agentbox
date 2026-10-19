@@ -44,6 +44,7 @@ import { collectAgentCatalog } from './lib/agent-catalog';
 import { configureHubGitCredentials } from './lib/git-auth';
 import { cloudBackendLoader } from './lib/provider-importers';
 import { PEER_LOOPBACK_HEADER, isLoopbackAddress } from './lib/peer';
+import { createCodexBarProfileUsageHelper } from './lib/codexbar-profile-usage';
 
 const dev = process.env.NODE_ENV !== 'production';
 const port = Number.parseInt(process.env.AGENTBOX_HUB_PORT ?? '8787', 10);
@@ -202,6 +203,13 @@ async function main(): Promise<void> {
     store,
     custody,
     adminToken,
+    profileUsageToken: process.env.AGENTBOX_HUB_TOKEN ?? '',
+    profileUsageHelper: process.env.AGENTBOX_HUB_TOKEN
+      ? createCodexBarProfileUsageHelper({
+          custody,
+          fingerprintSecret: process.env.AGENTBOX_HUB_TOKEN,
+        })
+      : null,
     // Custody carries project seed tars, which dwarf the relay's 1 MiB
     // control-plane body cap. Env-tunable so a control box with unusually large
     // untracked seeds can be raised without a rebuild (`relay.custodyMaxBodyBytes`
