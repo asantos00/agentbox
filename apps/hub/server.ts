@@ -401,7 +401,7 @@ async function main(): Promise<void> {
     // it's clickable (0.0.0.0 is not a usable address in a browser).
     const openHost = host === '0.0.0.0' ? '127.0.0.1' : host;
     process.stdout.write(
-      `agentbox-hub: open http://${openHost}:${String(port)}/?token=${process.env.AGENTBOX_HUB_TOKEN ?? ''}\n`,
+      `agentbox-hub: open http://${openHost}:${String(port)}/ (token-authenticated)\n`,
     );
   }
 
