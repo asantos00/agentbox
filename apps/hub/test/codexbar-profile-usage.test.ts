@@ -18,7 +18,7 @@ describe('CodexBar profile usage helper', () => {
     binary = join(root, 'codexbar');
     custody = new FsCustodyStore({ root: join(root, 'custody') });
     profiles = new CredentialProfileStore(custody);
-    await writeFile(authPath, '{"token":"fixture-current"}', { mode: 0o600 });
+    await writeFile(authPath, '{"tokens":{"account_id":"account-fixture"}}', { mode: 0o600 });
     await writeFile(
       binary,
       `#!/bin/sh
@@ -49,6 +49,27 @@ printf '%s' '[{"usage":{"loginMethod":"pro","primary":{"usedPercent":12,"resetsA
       credits: 42,
       status: 'active',
       source: 'codexbar-oauth',
+    });
+  });
+
+  it('maps a Pi profile only when its provider identity matches CodexBar', async () => {
+    const piAuthPath = join(root, 'pi-auth.json');
+    await writeFile(piAuthPath, '{"openai-codex":{"accountId":"account-fixture"}}', {
+      mode: 0o600,
+    });
+    await profiles.update({ agentId: 'pi', profileId: 'personal' }, await readFile(piAuthPath));
+    const helper = createCodexBarProfileUsageHelper({
+      custody,
+      fingerprintSecret: 'fixture-secret',
+      codexAuthPath: authPath,
+      piAuthPath,
+      codexbarBinary: binary,
+    });
+
+    await expect(helper.inspect({ agentId: 'pi', profileId: 'personal' })).resolves.toMatchObject({
+      provider: 'codex',
+      identityMatch: true,
+      status: 'active',
     });
   });
 

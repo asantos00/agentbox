@@ -49,6 +49,22 @@ function parse(stdout: string): CodexBarRecord {
   return value[0] as CodexBarRecord;
 }
 
+function accountIdentity(agentId: 'codex' | 'pi', bytes: Buffer): string | undefined {
+  const value: unknown = JSON.parse(bytes.toString('utf8'));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (agentId === 'pi') {
+    const provider = row['openai-codex'];
+    if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return undefined;
+    const accountId = (provider as Record<string, unknown>).accountId;
+    return typeof accountId === 'string' && accountId.length > 0 ? accountId : undefined;
+  }
+  const tokens = row.tokens;
+  if (!tokens || typeof tokens !== 'object' || Array.isArray(tokens)) return undefined;
+  const accountId = (tokens as Record<string, unknown>).account_id;
+  return typeof accountId === 'string' && accountId.length > 0 ? accountId : undefined;
+}
+
 /**
  * Reads the selected named profile only after proving that its custody digest
  * matches the host Codex credential inspected by CodexBar. Callers can select a
@@ -58,14 +74,16 @@ export function createCodexBarProfileUsageHelper(input: {
   custody: CustodyStore;
   fingerprintSecret: string;
   codexAuthPath?: string;
+  piAuthPath?: string;
   codexbarBinary?: string;
 }): ProfileUsageHelper {
   const profiles = new CredentialProfileStore(input.custody);
-  const authPath = input.codexAuthPath ?? join(homedir(), '.codex', 'auth.json');
+  const codexAuthPath = input.codexAuthPath ?? join(homedir(), '.codex', 'auth.json');
+  const piAuthPath = input.piAuthPath ?? join(homedir(), '.agentbox', 'pi-credentials.json');
   const binary = input.codexbarBinary ?? '/opt/homebrew/bin/codexbar';
   return {
     async inspect(selection) {
-      if (selection.agentId !== 'codex')
+      if (selection.agentId !== 'codex' && selection.agentId !== 'pi')
         return {
           provider: selection.agentId,
           identityMatch: false,
@@ -78,9 +96,16 @@ export function createCodexBarProfileUsageHelper(input: {
           confidence: 'unavailable',
           errorCode: 'provider_unsupported',
         };
-      const [profile, auth] = await Promise.all([profiles.get(selection), readFile(authPath)]);
-      const digest = createHash('sha256').update(auth).digest('hex');
-      if (!profile || profile.sha256 !== digest)
+      const selectedAuthPath = selection.agentId === 'pi' ? piAuthPath : codexAuthPath;
+      const [profile, selectedAuth, codexAuth] = await Promise.all([
+        profiles.get(selection),
+        readFile(selectedAuthPath),
+        readFile(codexAuthPath),
+      ]);
+      const digest = createHash('sha256').update(selectedAuth).digest('hex');
+      const accountId = accountIdentity(selection.agentId, selectedAuth);
+      const codexAccountId = accountIdentity('codex', codexAuth);
+      if (!profile || profile.sha256 !== digest || !accountId || accountId !== codexAccountId)
         return {
           provider: 'codex',
           identityMatch: false,
@@ -115,7 +140,7 @@ export function createCodexBarProfileUsageHelper(input: {
       return {
         provider: 'codex',
         providerIdentityFingerprint: `hmac-sha256:${createHmac('sha256', input.fingerprintSecret)
-          .update(`${selection.agentId}\0${selection.profileId}\0${digest}`)
+          .update(`${selection.agentId}\0${selection.profileId}\0${accountId}`)
           .digest('hex')}`,
         identityMatch: true,
         windows: [
