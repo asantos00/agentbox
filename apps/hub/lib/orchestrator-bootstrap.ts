@@ -1,10 +1,10 @@
+import { lookup } from 'node:dns/promises';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SyncTransport } from '@agentbox/core';
 
-export const ORCHESTRATOR_BOOTSTRAP_PATH =
-  '/workspace/.agentbox-orchestrator-bootstrap.json';
+export const ORCHESTRATOR_BOOTSTRAP_PATH = '/workspace/.agentbox-orchestrator-bootstrap.json';
 
 const CAPABILITY = /^[A-Za-z0-9._~-]{32,512}$/;
 const PROTOCOL = {
@@ -75,6 +75,8 @@ export function canonicalOrchestratorBootstrap(value: string, now = Date.now()):
 export async function stageOrchestratorBootstrap(
   transport: SyncTransport,
   canonical: string,
+  resolveIpv4: (hostname: string) => Promise<{ address: string }> = (hostname) =>
+    lookup(hostname, { family: 4 }),
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'agentbox-orchestrator-bootstrap-'));
   const source = join(dir, 'bootstrap.json');
@@ -87,7 +89,46 @@ export async function stageOrchestratorBootstrap(
     if ((await transport.readText(ORCHESTRATOR_BOOTSTRAP_PATH)) !== canonical) {
       throw new Error('orchestrator bootstrap staging verification failed');
     }
+    await ensureTailnetControllerResolution(transport, canonical, resolveIpv4);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function ensureTailnetControllerResolution(
+  transport: SyncTransport,
+  canonical: string,
+  resolveIpv4: (hostname: string) => Promise<{ address: string }>,
+): Promise<void> {
+  const hostname = new URL(String(record(JSON.parse(canonical))?.controller)).hostname;
+  if (!hostname.endsWith('.ts.net')) return;
+  const { address } = await resolveIpv4(hostname);
+  const octets = address.split('.').map(Number);
+  if (
+    octets.length !== 4 ||
+    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255) ||
+    octets[0] !== 100 ||
+    octets[1]! < 64 ||
+    octets[1]! > 127
+  ) {
+    throw new Error('orchestrator controller did not resolve to a tailnet address');
+  }
+  const result = await transport.exec(
+    [
+      '/bin/sh',
+      '-c',
+      'grep -F " $1" /etc/hosts >/dev/null 2>&1 || printf "%s %s\\n" "$2" "$1" >> /etc/hosts',
+      'agentbox-orchestrator-host',
+      hostname,
+      address,
+    ],
+    { user: 'root', noRetry: true },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error('orchestrator controller host staging failed');
+  }
+  const verified = await transport.exec(['getent', 'hosts', hostname], { noRetry: true });
+  if (verified.exitCode !== 0 || !verified.stdout.split(/\s+/).includes(address)) {
+    throw new Error('orchestrator controller host staging verification failed');
   }
 }

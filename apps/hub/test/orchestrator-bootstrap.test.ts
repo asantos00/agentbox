@@ -38,8 +38,7 @@ describe('orchestrator worker bootstrap', () => {
           uid: options?.uid,
         };
       },
-      readText: async (path: string) =>
-        staged?.destination === path ? staged.contents : null,
+      readText: async (path: string) => (staged?.destination === path ? staged.contents : null),
     } as unknown as SyncTransport;
 
     await stageOrchestratorBootstrap(transport, canonical);
@@ -50,6 +49,38 @@ describe('orchestrator worker bootstrap', () => {
       mode: 0o600,
       uid: 1000,
     });
+  });
+
+  it('stages and verifies a tailnet controller host mapping inside the box', async () => {
+    const canonical = canonicalOrchestratorBootstrap(
+      raw.replace('controller.example.test', 'controller.tailnet.ts.net'),
+      now,
+    );
+    let staged: string | undefined;
+    const commands: Array<{ command: string[]; user?: string }> = [];
+    const transport = {
+      caps: { persistentVolumes: false, helperContainer: false, ephemeralFs: true },
+      pushFile: async (source: string) => {
+        staged = await readFile(source, 'utf8');
+      },
+      readText: async () => staged ?? null,
+      exec: async (command: string[], options?: { user?: string }) => {
+        commands.push({ command, user: options?.user });
+        return command[0] === 'getent'
+          ? { exitCode: 0, stdout: '100.85.140.42 controller.tailnet.ts.net\n', stderr: '' }
+          : { exitCode: 0, stdout: '', stderr: '' };
+      },
+    } as unknown as SyncTransport;
+
+    await stageOrchestratorBootstrap(transport, canonical, async () => ({
+      address: '100.85.140.42',
+    }));
+
+    expect(commands).toHaveLength(2);
+    expect(commands[0]?.user).toBe('root');
+    expect(commands[0]?.command).toContain('controller.tailnet.ts.net');
+    expect(commands[0]?.command).toContain('100.85.140.42');
+    expect(commands[1]?.command).toEqual(['getent', 'hosts', 'controller.tailnet.ts.net']);
   });
 
   it('rejects malformed, expired, and open-ended bootstrap documents', () => {
