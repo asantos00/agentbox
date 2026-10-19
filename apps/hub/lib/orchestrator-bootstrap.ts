@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { SyncTransport } from '@agentbox/core';
 
 export const ORCHESTRATOR_BOOTSTRAP_PATH =
-  '/run/agentbox/credentials/.orchestrator-bootstrap.json';
+  '/workspace/.agentbox-orchestrator-bootstrap.json';
 
 const CAPABILITY = /^[A-Za-z0-9._~-]{32,512}$/;
 const PROTOCOL = {
