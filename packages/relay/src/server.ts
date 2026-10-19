@@ -682,7 +682,10 @@ export function createRelayServer(opts: RelayServerOptions): RelayServerHandle {
         });
         return;
       }
-      const registration = await store.getBox(body.boxId);
+      const registration =
+        (await store.getBox(body.boxId)) ??
+        (await capabilityPreparation.registrations?.resolve(body.boxId)) ??
+        null;
       if (!registration) {
         send(res, 404, { error: { code: 'not_found', message: 'approved box not found' } });
         return;

@@ -17,12 +17,14 @@ function boundedId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value);
 }
 
-function normalizedResult(
+export function normalizedResult(
   kind: 'box.create' | 'agent.launch',
   value: unknown,
 ): Record<string, unknown> | null {
   const row = record(value);
-  if (!row || row.ok !== true) return null;
+  if (!row) return null;
+  if (row.ok === false) return { ok: false, errorCode: 'action_failed' };
+  if (row.ok !== true) return null;
   if (kind === 'box.create') {
     return boundedId(row.jobId) ? { jobId: row.jobId } : null;
   }

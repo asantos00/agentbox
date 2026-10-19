@@ -2512,7 +2512,7 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
         const resolved = await resolveBoxProvider(id, hydrate);
         if (!resolved) return { ok: false, error: `box ${id} not found` };
         const spec = findAgentSpec(input.agent);
-        if (!spec || spec.caps.surface !== 'tui') {
+        if (!spec || spec.caps.surface === 'service') {
           return { ok: false, error: `agent ${input.agent} cannot start as a detached TUI` };
         }
         const sessionName = input.sessionName?.trim() || spec.sessionName;

@@ -4,8 +4,22 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FsOperationJournal, operationRequestHash } from '@agentbox/relay/operation-journal';
 import { observeJournaledApiMutation } from '../app/(dashboard)/api/v1/lib/idempotency';
+import { normalizedResult } from '../app/(dashboard)/api/v1/operations/[key]/route.js';
 
 describe('controller operation status', () => {
+  it('exposes a bounded code instead of a failed operation error', () => {
+    expect(
+      normalizedResult('agent.launch', {
+        ok: false,
+        error: 'secret-bearing backend detail /private/path',
+      }),
+    ).toEqual({ ok: false, errorCode: 'action_failed' });
+    expect(normalizedResult('agent.launch', { ok: false, error: { unsafe: true } })).toEqual({
+      ok: false,
+      errorCode: 'action_failed',
+    });
+  });
+
   it('distinguishes absent, committed, and ambiguous journal state', async () => {
     const journal = new FsOperationJournal(await mkdtemp(join(tmpdir(), 'agentbox-operations-')));
     await expect(observeJournaledApiMutation(journal, 'missing')).resolves.toEqual({

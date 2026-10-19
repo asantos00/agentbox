@@ -53,6 +53,10 @@ export interface CapabilityTargetVerifier {
 export interface CapabilityPreparationService {
   profiles: CapabilityProfileRegistry;
   targets: CapabilityTargetVerifier;
+  /** Optional authoritative provider lookup for boxes restored after relay restart. */
+  registrations?: {
+    resolve(boxId: string): Promise<BoxRegistration | null>;
+  };
 }
 
 export function capabilityTargetMatchesRegistration(

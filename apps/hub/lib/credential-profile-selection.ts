@@ -25,9 +25,12 @@ export function validateCredentialProfileSelections(
       throw new Error('credential profile selection names more than one profile for an agent');
     }
     selectedAgents.add(selection.agentId);
-    const allowed = runtimeAgent!.modelAuth?.sources.some(
-      (source) => source.kind === 'agent' && modelAuthSourceId(source) === selection.agentId,
-    );
-    if (!allowed) throw new Error('credential profile is not a declared model-auth source for this agent');
+    const allowed =
+      (selection.agentId === runtimeAgent!.id && runtimeAgent!.credential !== undefined) ||
+      runtimeAgent!.modelAuth?.sources.some(
+        (source) => source.kind === 'agent' && modelAuthSourceId(source) === selection.agentId,
+      );
+    if (!allowed)
+      throw new Error('credential profile is not a declared credential source for this agent');
   }
 }

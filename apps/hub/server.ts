@@ -45,6 +45,7 @@ import { configureHubGitCredentials } from './lib/git-auth';
 import { cloudBackendLoader } from './lib/provider-importers';
 import { PEER_LOOPBACK_HEADER, isLoopbackAddress } from './lib/peer';
 import { createCodexBarProfileUsageHelper } from './lib/codexbar-profile-usage';
+import { createOrchestratorCapabilityPreparation } from './lib/orchestrator-capability-preparation';
 
 const dev = process.env.NODE_ENV !== 'production';
 const port = Number.parseInt(process.env.AGENTBOX_HUB_PORT ?? '8787', 10);
@@ -196,6 +197,38 @@ async function main(): Promise<void> {
     .then((c) => c.effective.hub.gitAuth)
     .catch(() => undefined);
 
+  const orchestratorCapabilityBackend =
+    process.env.AGENTBOX_ORCHESTRATOR_CAPABILITY_BACKEND?.trim();
+  const orchestratorCapabilityPreparation = orchestratorCapabilityBackend
+    ? createOrchestratorCapabilityPreparation({
+        resolver: cloudBackendLoader,
+        backend: orchestratorCapabilityBackend,
+        boxNamePrefix:
+          process.env.AGENTBOX_ORCHESTRATOR_CAPABILITY_BOX_PREFIX?.trim() || 'dispatch-',
+        resolveRegistration: async (boxId) => {
+          const backend = globalThis.__AGENTBOX_HUB_BACKEND;
+          if (!backend) return null;
+          const box = (await backend.getData()).boxes.find((candidate) => candidate.id === boxId);
+          if (
+            !box ||
+            box.provider !== orchestratorCapabilityBackend ||
+            typeof box.sandboxId !== 'string' ||
+            typeof box.name !== 'string'
+          )
+            return null;
+          return {
+            boxId: box.id,
+            token: 'provider-restored-registration',
+            name: box.name,
+            registeredAt: new Date(box.createdAt).toISOString(),
+            kind: 'cloud',
+            backend: box.provider,
+            sandboxId: box.sandboxId,
+          };
+        },
+      })
+    : undefined;
+
   const daemon = await startRelayDaemon({
     port,
     host,
@@ -210,6 +243,12 @@ async function main(): Promise<void> {
           fingerprintSecret: process.env.AGENTBOX_HUB_TOKEN,
         })
       : null,
+    ...(orchestratorCapabilityPreparation && process.env.AGENTBOX_HUB_TOKEN
+      ? {
+          capabilityPreparationToken: process.env.AGENTBOX_HUB_TOKEN,
+          capabilityPreparation: orchestratorCapabilityPreparation,
+        }
+      : {}),
     // Custody carries project seed tars, which dwarf the relay's 1 MiB
     // control-plane body cap. Env-tunable so a control box with unusually large
     // untracked seeds can be raised without a rebuild (`relay.custodyMaxBodyBytes`
