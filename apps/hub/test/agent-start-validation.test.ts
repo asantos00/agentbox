@@ -30,6 +30,18 @@ describe('existing-box agent start request', () => {
     });
   });
 
+  it('rejects oversized or unsafe detached startup inputs', () => {
+    expect(parseStartBoxAgent({ agent: 'pi', prompt: 'x'.repeat(16_385) })).toMatchObject({
+      ok: false,
+    });
+    expect(parseStartBoxAgent({ agent: 'pi', prompt: 'unsafe\u0000prompt' })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      parseStartBoxAgent({ agent: 'pi', orchestratorBootstrap: 'x'.repeat(4_097) }),
+    ).toMatchObject({ ok: false });
+  });
+
   it('rejects missing or malformed orchestrator version pins when supplied', () => {
     expect(parseStartBoxAgent({ agent: 'pi', expectedVersion: '' })).toMatchObject({ ok: false });
     expect(parseStartBoxAgent({ agent: 'pi', expectedVersion: 'latest' })).toMatchObject({

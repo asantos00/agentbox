@@ -265,6 +265,8 @@ export interface StartDetachedCloudAgentArgs {
   expectedVersion?: string;
   /** AgentBox-owned selected-profile stage, after install and before ingest/tmux. */
   stageCredentialProfiles?: (transport: SyncTransport) => Promise<void>;
+  /** Private launch material staged as a file before tmux; never rendered into argv. */
+  stageLaunchBootstrap?: (transport: SyncTransport) => Promise<void>;
 }
 
 /**
@@ -383,10 +385,12 @@ export async function startDetachedCloudAgent(
   // paused sandbox fails, and an install failure must short-circuit before any
   // config/credential staging or tmux launch.
   await seedDeclaredFilesForLaunch(provider, box, binary);
+  const launchTransport = provider.syncTransport?.(box) ?? execOnlyTransport(provider, box);
   if (args.stageCredentialProfiles) {
-    await args.stageCredentialProfiles(
-      provider.syncTransport?.(box) ?? execOnlyTransport(provider, box),
-    );
+    await args.stageCredentialProfiles(launchTransport);
+  }
+  if (args.stageLaunchBootstrap) {
+    await args.stageLaunchBootstrap(launchTransport);
   }
   // Same seam, same reason as the docker path: after the binary exists, before
   // the session starts. Hash-gated, so a warm start is a no-op unless the

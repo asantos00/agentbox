@@ -52,6 +52,10 @@ import { createManagerBackend } from './backend/managers';
 import { createTimelineBackend, withBoxTimeline } from './backend/timeline';
 import { createWorkspaceBackend } from './backend/workspaces';
 import { validateCredentialProfileSelections } from './credential-profile-selection.js';
+import {
+  canonicalOrchestratorBootstrap,
+  stageOrchestratorBootstrap,
+} from './orchestrator-bootstrap.js';
 import type { BackendDeps } from './backend/deps';
 import {
   configureBoxPushStat,
@@ -2517,6 +2521,15 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
         }
         const sessionName = input.sessionName?.trim() || spec.sessionName;
         const sessionLabel = input.sessionLabel?.trim() || resolved.box.name;
+        let orchestratorBootstrap: string | undefined;
+        try {
+          orchestratorBootstrap =
+            input.orchestratorBootstrap === undefined
+              ? undefined
+              : canonicalOrchestratorBootstrap(input.orchestratorBootstrap);
+        } catch {
+          return { ok: false, error: 'orchestrator bootstrap is unavailable' };
+        }
         const extraArgs = resolveAgentLauncher(toQueueKind(input.agent)).buildArgs(
           input.prompt ?? '',
           input.args ?? [],
@@ -2556,6 +2569,12 @@ export function createHubBackend(handle: RelayServerHandle): HubBackend {
                 },
               }
             : {}),
+          ...(orchestratorBootstrap === undefined
+            ? {}
+            : {
+                stageLaunchBootstrap: (transport: SyncTransport) =>
+                  stageOrchestratorBootstrap(transport, orchestratorBootstrap),
+              }),
         });
         await mutateState((state) => ({
           ...state,

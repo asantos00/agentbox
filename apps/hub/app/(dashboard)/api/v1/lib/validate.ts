@@ -105,13 +105,24 @@ export function parseStartBoxAgent(
   allowedAgents: readonly string[] = AGENTS.filter((agent) => agent !== 'none'),
 ): Parsed<StartBoxAgentInput> {
   if (!isObject(body)) return { ok: false, message: 'body must be a JSON object' };
-  const { agent, prompt, args, sessionName, sessionLabel, expectedVersion, credentialProfiles } =
-    body;
+  const {
+    agent,
+    prompt,
+    args,
+    sessionName,
+    sessionLabel,
+    expectedVersion,
+    credentialProfiles,
+    orchestratorBootstrap,
+  } = body;
   if (typeof agent !== 'string' || !allowedAgents.includes(agent)) {
     return { ok: false, message: `agent must be one of ${allowedAgents.join(', ')}` };
   }
-  if (prompt !== undefined && typeof prompt !== 'string') {
-    return { ok: false, message: 'prompt must be a string' };
+  if (
+    prompt !== undefined &&
+    (typeof prompt !== 'string' || Buffer.byteLength(prompt) > 16_384 || prompt.includes('\u0000'))
+  ) {
+    return { ok: false, message: 'prompt must be a safe string up to 16384 bytes' };
   }
   if (args !== undefined && (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string'))) {
     return { ok: false, message: 'args must be an array of strings' };
@@ -128,6 +139,14 @@ export function parseStartBoxAgent(
       !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(expectedVersion))
   ) {
     return { ok: false, message: 'expectedVersion must be an exact semantic version' };
+  }
+  if (
+    orchestratorBootstrap !== undefined &&
+    (typeof orchestratorBootstrap !== 'string' ||
+      Buffer.byteLength(orchestratorBootstrap) > 4_096 ||
+      orchestratorBootstrap.includes('\u0000'))
+  ) {
+    return { ok: false, message: 'orchestratorBootstrap must be a safe string up to 4096 bytes' };
   }
   if (credentialProfiles !== undefined) {
     if (!Array.isArray(credentialProfiles))
@@ -167,6 +186,7 @@ export function parseStartBoxAgent(
       ...(credentialProfiles === undefined
         ? {}
         : { credentialProfiles: credentialProfiles as { agentId: string; profileId: string }[] }),
+      ...(orchestratorBootstrap === undefined ? {} : { orchestratorBootstrap }),
     },
   };
 }

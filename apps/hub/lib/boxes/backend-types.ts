@@ -358,6 +358,8 @@ export interface StartBoxAgentInput {
   expectedVersion?: string;
   /** Selected model-auth profiles; stable metadata only, never credential bytes. */
   credentialProfiles?: { agentId: string; profileId: string }[];
+  /** Closed worker bootstrap staged as a private file; never placed in process arguments. */
+  orchestratorBootstrap?: string;
 }
 
 export type StartBoxAgentResult =
