@@ -572,7 +572,7 @@ function hasGitAt(root: string): Promise<boolean> {
   return value;
 }
 
-function mapRegistrationToBox(reg: BoxRegistration): Box {
+export function mapRegistrationToBox(reg: BoxRegistration): Box {
   const createdAt = Date.parse(reg.createdAt ?? reg.registeredAt) || Date.now();
   const { id: projectId, repo: repoKey } = registrationProjectKey(reg);
   return {
@@ -591,7 +591,7 @@ function mapRegistrationToBox(reg: BoxRegistration): Box {
     supportsBackup: findAgentSpec(reg.agent ?? '')?.stateBackup !== undefined ? true : undefined,
     task: reg.name,
     displayName: null,
-    agent: normalizeLastAgent(reg.agent as BoxRecord['lastAgent']) ?? 'claude',
+    agent: normalizeLastAgent(reg.agent as BoxRecord['lastAgent']) ?? 'shell',
     status: 'running',
     createdAt,
     lastActivity: createdAt,
