@@ -1134,10 +1134,10 @@ async function recoverOrphanedWorkers(
   }
 }
 
-/** Terminal job manifests older than this are swept so `queue list` and the
- *  scheduler don't accumulate unbounded done/failed/cancelled entries (they
- *  never gate concurrency, but they pollute listings and were never cleaned). */
-export const TERMINAL_RETENTION_MS = 60 * 60 * 1_000;
+/** Terminal job manifests remain exact create receipts long enough for a
+ *  controller outage, operator review, and restart reconciliation. The queue
+ *  still sweeps them after a bounded period so listings cannot grow forever. */
+export const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 const SWEEP_INTERVAL_MS = 60 * 1_000;
 const TERMINAL_STATUSES: readonly QueueJobStatus[] = ['done', 'failed', 'cancelled'];
 
