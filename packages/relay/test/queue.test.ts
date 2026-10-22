@@ -18,6 +18,7 @@ import {
   selectNextRunnablePrepare,
   startQueueLoop,
   STARTUP_GRACE_MS,
+  TERMINAL_RETENTION_MS,
   writeJob,
   type QueueConfig,
   type QueueJob,
@@ -51,6 +52,12 @@ function job(p: Partial<QueueJob> & { id: string }): QueueJob {
     ...p,
   };
 }
+
+describe('terminal job retention', () => {
+  it('keeps exact create receipts through long controller outages and restarts', () => {
+    expect(TERMINAL_RETENTION_MS).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 * 1_000);
+  });
+});
 
 describe('selectNextRunnable', () => {
   it('returns null on an empty list', () => {
