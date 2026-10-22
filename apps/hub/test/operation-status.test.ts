@@ -20,6 +20,28 @@ describe('controller operation status', () => {
     });
   });
 
+  it('exposes bounded capability preparation outcomes for restart reconciliation', () => {
+    const common = {
+      capabilityProfileId: 'node',
+      capabilities: ['node'],
+      providerMutationId: 'agentbox-op-1234',
+    };
+    expect(
+      normalizedResult('capability.prepare', {
+        ...common,
+        status: 'ready',
+        readiness: { unsafe: 'not exposed' },
+      }),
+    ).toEqual({ ...common, status: 'ready' });
+    expect(
+      normalizedResult('capability.prepare', {
+        ...common,
+        status: 'failed',
+        failure: 'secret provider detail',
+      }),
+    ).toEqual({ ...common, status: 'failed' });
+  });
+
   it('distinguishes absent, committed, and ambiguous journal state', async () => {
     const journal = new FsOperationJournal(await mkdtemp(join(tmpdir(), 'agentbox-operations-')));
     await expect(observeJournaledApiMutation(journal, 'missing')).resolves.toEqual({
