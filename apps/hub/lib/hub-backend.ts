@@ -395,6 +395,11 @@ interface ProjectRegrouping {
   reg: BoxRegistration;
 }
 
+export function projectBoxAgent(agent: string | undefined): Box['agent'] {
+  if (!agent) return 'shell';
+  return findAgentSpec(agent)?.id ?? normalizeLastAgent(agent) ?? 'claude';
+}
+
 function mapBox(
   b: ListedBox,
   regroup?: ProjectRegrouping,
@@ -420,10 +425,7 @@ function mapBox(
     // it answers `undefined` for openclaw and every `agentbox agent add` agent,
     // and the `?? 'claude'` below then reported an OpenClaw box as a Claude one.
     // `findAgentSpec` resolves ids AND wire aliases ('claude-code') registry-wide.
-    agent:
-      (b.lastAgent ? findAgentSpec(b.lastAgent)?.id : undefined) ??
-      normalizeLastAgent(b.lastAgent) ??
-      'claude',
+    agent: projectBoxAgent(b.lastAgent),
     status,
     createdAt,
     lastActivity: createdAt,
@@ -591,7 +593,7 @@ export function mapRegistrationToBox(reg: BoxRegistration): Box {
     supportsBackup: findAgentSpec(reg.agent ?? '')?.stateBackup !== undefined ? true : undefined,
     task: reg.name,
     displayName: null,
-    agent: normalizeLastAgent(reg.agent as BoxRecord['lastAgent']) ?? 'shell',
+    agent: projectBoxAgent(reg.agent),
     status: 'running',
     createdAt,
     lastActivity: createdAt,

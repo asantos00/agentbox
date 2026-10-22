@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { BoxRegistration } from '@agentbox/relay';
-import { mapRegistrationToBox } from '../lib/hub-backend';
+import { mapRegistrationToBox, projectBoxAgent } from '../lib/hub-backend';
 
 describe('agentless box projection', () => {
-  it('reports an agentless registration as shell rather than inventing claude', () => {
+  it('reports absent agent identity as shell for local and registered boxes', () => {
+    expect(projectBoxAgent(undefined)).toBe('shell');
+
     const registration = {
       boxId: 'box-agentless',
       token: 'not-used',
