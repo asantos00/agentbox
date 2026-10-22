@@ -18,11 +18,28 @@ function boundedId(value: unknown): value is string {
 }
 
 export function normalizedResult(
-  kind: 'box.create' | 'agent.launch',
+  kind: 'box.create' | 'agent.launch' | 'capability.prepare',
   value: unknown,
 ): Record<string, unknown> | null {
   const row = record(value);
   if (!row) return null;
+  if (kind === 'capability.prepare') {
+    if (
+      (row.status !== 'ready' && row.status !== 'failed') ||
+      !boundedId(row.capabilityProfileId) ||
+      !boundedId(row.providerMutationId) ||
+      !Array.isArray(row.capabilities) ||
+      row.capabilities.length > 64 ||
+      row.capabilities.some((capability) => !boundedId(capability))
+    )
+      return null;
+    return {
+      status: row.status,
+      capabilityProfileId: row.capabilityProfileId,
+      capabilities: row.capabilities,
+      providerMutationId: row.providerMutationId,
+    };
+  }
   if (row.ok === false) return { ok: false, errorCode: 'action_failed' };
   if (row.ok !== true) return null;
   if (kind === 'box.create') {
@@ -63,7 +80,11 @@ export async function GET(
     return fail('invalid_request', 'invalid operation key');
   }
   if (observation.state === 'absent') return ok(observation);
-  if (observation.kind !== 'box.create' && observation.kind !== 'agent.launch') {
+  if (
+    observation.kind !== 'box.create' &&
+    observation.kind !== 'agent.launch' &&
+    observation.kind !== 'capability.prepare'
+  ) {
     return fail('not_found', 'operation is not available on this control surface');
   }
   if (observation.state === 'ambiguous') return ok(observation);

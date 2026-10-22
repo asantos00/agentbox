@@ -37,8 +37,17 @@ async function observeNode(
   const handle = await backend.get(target.endpoint.sandboxId);
   if (!handle || handle.sandboxId !== target.endpoint.sandboxId)
     return failed('node', operationTag);
-  const result = await backend.exec(handle, 'node --version && npm --version');
-  const ready = result.exitCode === 0;
+  let ready = false;
+  try {
+    const state = await backend.state(handle);
+    if (state === 'paused') await backend.resume(handle);
+    else if (state === 'stopped') await backend.start(handle);
+    else if (state !== 'running') return failed('node', operationTag);
+    const result = await backend.exec(handle, 'node --version && npm --version');
+    ready = result.exitCode === 0;
+  } catch {
+    return failed('node', operationTag);
+  }
   return ready
     ? {
         status: 'ready',
